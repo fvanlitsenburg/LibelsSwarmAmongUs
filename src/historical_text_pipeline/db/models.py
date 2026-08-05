@@ -44,10 +44,15 @@ class Document(Base):
     __tablename__ = "documents"
 
     __table_args__ = (
-        UniqueConstraint(
+    UniqueConstraint(
             "source",
             "source_record_id",
             name="uq_documents_source_record_id",
+        ),
+        UniqueConstraint(
+            "source",
+            "file_checksum",
+            name="uq_documents_source_file_checksum",
         ),
         Index("ix_documents_source_year", "source", "year"),
         Index(

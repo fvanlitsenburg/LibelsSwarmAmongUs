@@ -1,7 +1,10 @@
 """Find DUPO PDFs inside configured year directories."""
 
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
+
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -10,6 +13,23 @@ class DupoPdf:
 
     path: Path
     year: int
+
+
+def calculate_sha256(path: Path) -> str:
+    """
+    Calculate a file's SHA-256 checksum.
+
+    The file is read in chunks so large PDFs are not loaded entirely
+    into memory.
+    """
+
+    digest = sha256()
+
+    with path.open("rb") as source_file:
+        while chunk := source_file.read(HASH_CHUNK_SIZE):
+            digest.update(chunk)
+
+    return digest.hexdigest()
 
 
 def find_dupo_pdfs(root: Path) -> list[DupoPdf]:

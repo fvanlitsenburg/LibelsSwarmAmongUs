@@ -9,7 +9,8 @@ dependencies = [
     "pydantic-settings>=2,<3",
     "SQLAlchemy>=2,<3",
     "psycopg[binary]>=3,<4",
-    "alembic>=1,<2"
+    "alembic>=1,<2",
+    "pypdf>=6,<7"
 ]
 
 [project.optional-dependencies]
