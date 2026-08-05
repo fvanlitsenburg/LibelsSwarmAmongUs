@@ -4,7 +4,6 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     DateTime,
     Float,
@@ -16,9 +15,8 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy import (
-    Enum as SqlEnum,
-)
+from sqlalchemy import Enum as SqlEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from historical_text_pipeline.db.base import Base
@@ -304,7 +302,7 @@ class TcpMetadata(Base):
         nullable=True,
     )
     source_terms: Mapped[list[str]] = mapped_column(
-        JSON,
+        JSONB,
         nullable=False,
         default=list,
     )
@@ -451,12 +449,12 @@ class RelevanceAssessment(Base):
     )
 
     supporting_evidence: Mapped[list[str]] = mapped_column(
-        JSON,
+        JSONB,
         nullable=False,
         default=list,
     )
     missing_information: Mapped[list[str]] = mapped_column(
-        JSON,
+        JSONB,
         nullable=False,
         default=list,
     )

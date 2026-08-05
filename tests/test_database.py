@@ -1,9 +1,9 @@
-from pathlib import Path
+"""Tests for the shared PostgreSQL data model."""
 
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import inspect, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from historical_text_pipeline.db.base import Base
 from historical_text_pipeline.db.models import (
     Document,
     DupoMetadata,
@@ -12,16 +12,8 @@ from historical_text_pipeline.db.models import (
 from historical_text_pipeline.domain import Source
 
 
-def make_test_engine(database_path: Path):
-    return create_engine(f"sqlite:///{database_path}")
-
-
-def test_database_schema_is_created(tmp_path: Path) -> None:
-    engine = make_test_engine(tmp_path / "schema.sqlite3")
-
-    Base.metadata.create_all(engine)
-
-    table_names = set(inspect(engine).get_table_names())
+def test_database_schema_is_created(db_engine: Engine) -> None:
+    table_names = set(inspect(db_engine).get_table_names())
 
     assert table_names == {
         "documents",
@@ -32,10 +24,7 @@ def test_database_schema_is_created(tmp_path: Path) -> None:
     }
 
 
-def test_dupo_identifiers_remain_separate(tmp_path: Path) -> None:
-    engine = make_test_engine(tmp_path / "dupo.sqlite3")
-    Base.metadata.create_all(engine)
-
+def test_dupo_identifiers_are_separate(db_engine: Engine) -> None:
     document = Document(
         source=Source.DUPO,
         source_record_id="KB0_KB01436",
@@ -50,11 +39,11 @@ def test_dupo_identifiers_remain_separate(tmp_path: Path) -> None:
         ),
     )
 
-    with Session(engine) as session:
+    with Session(db_engine) as session:
         session.add(document)
         session.commit()
 
-    with Session(engine) as session:
+    with Session(db_engine) as session:
         saved = session.scalar(
             select(Document).where(
                 Document.source_record_id == "KB0_KB01436"
@@ -67,10 +56,7 @@ def test_dupo_identifiers_remain_separate(tmp_path: Path) -> None:
         assert saved.dupo.knuttel_number == "1436"
 
 
-def test_tcp_metadata_is_stored(tmp_path: Path) -> None:
-    engine = make_test_engine(tmp_path / "tcp.sqlite3")
-    Base.metadata.create_all(engine)
-
+def test_tcp_metadata_is_stored(db_engine: Engine) -> None:
     document = Document(
         source=Source.TCP,
         source_record_id="A12345",
@@ -90,13 +76,15 @@ def test_tcp_metadata_is_stored(tmp_path: Path) -> None:
         ),
     )
 
-    with Session(engine) as session:
+    with Session(db_engine) as session:
         session.add(document)
         session.commit()
 
-    with Session(engine) as session:
+    with Session(db_engine) as session:
         saved = session.scalar(
-            select(Document).where(Document.source_record_id == "A12345")
+            select(Document).where(
+                Document.source_record_id == "A12345"
+            )
         )
 
         assert saved is not None
