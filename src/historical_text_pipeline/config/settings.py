@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     pdf_render_dpi: int = 300
     pdf_jpeg_quality: int = 95
     
+    openai_relevance_model: str = "gpt-5-nano"
+    openai_relevance_max_output_tokens: int = 4_000
+    openai_relevance_reasoning_effort: str = "low"
+    
+    openai_final_model: str = "gpt-5-mini"
+    openai_final_max_output_tokens: int = 4_000
+    openai_final_reasoning_effort: str = "low"
+
+    # This is an LSAU safety limit, not an API limit.
+    final_assessment_max_estimated_input_tokens: int = 100_000
+
+    relevance_batch_size: int = 3
+    relevance_stop_confidence_threshold: float = 0.80
+    relevance_criteria_path: Path = Path("relevance_criteria.txt")
     
 
 

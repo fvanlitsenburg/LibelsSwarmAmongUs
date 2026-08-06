@@ -10,7 +10,10 @@ from historical_text_pipeline.ingest.dupo_inspection import (
     inspect_dupo_documents,
 )
 from historical_text_pipeline.ingest.dupo_knuttel import (
+    DupoKnuttelError,
     KnuttelExtraction,
+    KnuttelSaveResult,
+    extract_and_save_knuttel_number,
     extract_knuttel_number_from_first_page,
     find_knuttel_candidates,
     find_knuttel_number,
@@ -18,6 +21,7 @@ from historical_text_pipeline.ingest.dupo_knuttel import (
 from historical_text_pipeline.ingest.dupo_ocr import (
     DupoPageOcrError,
     DupoPageOcrResult,
+    get_missing_dupo_pages,
     ocr_dupo_page,
 )
 from historical_text_pipeline.ingest.dupo_registration import (
@@ -32,18 +36,22 @@ from historical_text_pipeline.ingest.pdf_inspection import (
 
 __all__ = [
     "DupoInspectionResult",
+    "DupoKnuttelError",
     "DupoPageOcrError",
     "DupoPageOcrResult",
     "DupoPdf",
     "DupoRegistrationResult",
     "KnuttelExtraction",
+    "KnuttelSaveResult",
     "PdfInspection",
     "PdfInspectionError",
     "calculate_sha256",
+    "extract_and_save_knuttel_number",
     "extract_knuttel_number_from_first_page",
     "find_dupo_pdfs",
     "find_knuttel_candidates",
     "find_knuttel_number",
+    "get_missing_dupo_pages",
     "inspect_dupo_documents",
     "inspect_pdf",
     "ocr_dupo_page",

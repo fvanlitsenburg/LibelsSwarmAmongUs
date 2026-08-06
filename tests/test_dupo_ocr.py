@@ -12,9 +12,13 @@ from historical_text_pipeline.db.models import (
     DocumentTextUnit,
     DupoMetadata,
 )
-from historical_text_pipeline.domain import Source
+from historical_text_pipeline.domain import (
+    ClassificationStatus,
+    Source,
+)
 from historical_text_pipeline.ingest import dupo_ocr
 from historical_text_pipeline.ingest.dupo_ocr import (
+    get_missing_dupo_pages,
     ocr_dupo_page,
 )
 from historical_text_pipeline.ocr.base import OcrPageResult
@@ -244,3 +248,46 @@ def test_final_page_marks_document_complete(
         assert document.units_processed == 1
         assert document.text_complete is True
         assert document.processing_status == "ocr_complete"
+        assert document.classification_status == (
+            ClassificationStatus.FULL_TEXT
+        )
+        
+def test_returns_only_missing_page_numbers(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"fake PDF")
+
+    with Session(db_engine) as session:
+        document = add_dupo_document(
+            session,
+            pdf_path,
+            page_count=6,
+        )
+
+        for page_number in (1, 2, 3, 5):
+            text = f"Text from page {page_number}."
+
+            session.add(
+                DocumentTextUnit(
+                    document_id=document.id,
+                    unit_type="page",
+                    unit_number=page_number,
+                    text=text,
+                    character_count=len(text),
+                    word_count=len(text.split()),
+                    processing_method="ocr",
+                    ocr_provider="mistral",
+                    ocr_model="mistral-ocr-test",
+                )
+            )
+
+        session.commit()
+
+        missing_pages = get_missing_dupo_pages(
+            session,
+            document_id=document.id,
+        )
+
+        assert missing_pages == [4, 6]

@@ -10,7 +10,10 @@ from historical_text_pipeline.db.models import (
     Document,
     DocumentTextUnit,
 )
-from historical_text_pipeline.domain import Source
+from historical_text_pipeline.domain import (
+    ClassificationStatus,
+    Source,
+)
 from historical_text_pipeline.ocr.base import OcrBackend
 from historical_text_pipeline.ocr.pdf_rendering import (
     render_pdf_page_as_jpeg,
@@ -68,6 +71,47 @@ def _count_processed_pages(
 
     return int(count or 0)
 
+def get_missing_dupo_pages(
+    session: Session,
+    *,
+    document_id: int,
+) -> list[int]:
+    """Return page numbers that have not yet been stored."""
+
+    document = session.get(Document, document_id)
+
+    if document is None:
+        raise DupoPageOcrError(
+            f"Document {document_id} does not exist."
+        )
+
+    if document.source != Source.DUPO:
+        raise DupoPageOcrError(
+            f"Document {document_id} is not a DUPO document."
+        )
+
+    if document.total_units is None:
+        raise DupoPageOcrError(
+            f"Document {document_id} has not been inspected."
+        )
+
+    stored_page_numbers = set(
+        session.scalars(
+            select(DocumentTextUnit.unit_number).where(
+                DocumentTextUnit.document_id == document_id,
+                DocumentTextUnit.unit_type == "page",
+            )
+        )
+    )
+
+    return [
+        page_number
+        for page_number in range(
+            1,
+            document.total_units + 1,
+        )
+        if page_number not in stored_page_numbers
+    ]
 
 def ocr_dupo_page(
     session: Session,
@@ -185,11 +229,16 @@ def ocr_dupo_page(
         and processed_pages >= document.total_units
     )
 
-    document.processing_status = (
-        "ocr_complete"
-        if document.text_complete
-        else "ocr_partial"
-    )
+    if document.text_complete:
+        document.processing_status = "ocr_complete"
+        document.classification_status = (
+            ClassificationStatus.FULL_TEXT
+        )
+    else:
+        document.processing_status = "ocr_partial"
+        document.classification_status = (
+            ClassificationStatus.PARTIAL_TEXT
+        )
 
     session.flush()
 

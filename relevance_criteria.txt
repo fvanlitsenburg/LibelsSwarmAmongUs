@@ -1,0 +1,66 @@
+RESEARCH QUESTION
+Does this pamphlet provide evidence relevant to Anglo-Dutch political
+relations, propaganda, or information warfare in the period surrounding
+the Rampjaar (roughly 1650–1680), including the mechanics, content, or
+effects of pamphlet campaigns aimed at shaping domestic or foreign
+political opinion?
+
+RELEVANT WHEN
+- The pamphlet concerns Anglo-Dutch diplomatic, military, or trade
+  relations (war, treaties — secret or public, negotiations, naval
+  incidents, the Navigation Acts, fishery disputes).
+- The pamphlet concerns the House of Orange / stadtholderate question,
+  especially where it intersects with English politics or Anglo-Dutch
+  relations (e.g. William III's minority, States of Holland withholding
+  Orange offices, English pressure on the stadtholderate).
+- The pamphlet is itself an act of domestic political persuasion or
+  propaganda — a "praetje," dialogue, satire, examination, or polemic
+  aimed at shaping public or parliamentary opinion — covering national domestic issues
+- The pamphlet covers war engagements, specifically Anglo-Dutch or from the 1672 Rampjaar
+- The pamphlet covers questions of foreign affairs with a bearing on English or Dutch politics (or both)
+- The pamphlet involves legal or procedural material (trials,
+  examinations, interrogations) tied to a political crisis with an
+  Anglo-Dutch or Orangist dimension.
+  - The pamphlet involves a religious question that affects relations between European states (for example, fear of Catholicism in England vis-a-vis James II)
+
+IRRELEVANT WHEN
+- The pamphlet is purely religious/theological with no discernible
+  political dimension connecting to England or the Orange question.
+- The pamphlet is purely local/municipal administrative material
+  (guild disputes, parish records, etc.) unconnected to national
+  politics or Anglo-Dutch relations.
+- The pamphlet concerns foreign affairs entirely unrelated to England
+  or the Orange question (e.g. Baltic trade disputes, unrelated
+  colonial matters).
+- The pamphlet falls well outside the c. 1650–1680 window and has no
+  explicit bearing on that period as precursor or aftermath.
+
+IMPORTANT CONSERVATIVE RULES
+- Absence of evidence in the current pages is not sufficient evidence
+  of irrelevance.
+- A title page or introductory material may not reveal the document's
+  actual subject.
+- Poor OCR should lead to UNCERTAIN, not STOP.
+- STOP requires positive evidence that the document falls outside the
+  research criteria.
+
+CATEGORY TAXONOMY
+Choose exactly one of these categories, as matched to the relevance/irrelevance criteria:
+- dutch_on_anglo_dutch_trade_disputes_fishing_rights_or_flag_salute
+- dutch_on_orange_and_stadtholder
+- dutch_on_english_politics
+- dutch_on_dutch_politics
+- dutch_on_foreign_affairs
+- dutch_on_legal_or_procedural
+- dutch_on_relevant_religious
+- english_on_anglo_dutch_trade_disputes_fishing_rights_or_flag_salute
+- english_on_orange_and_stadtholder
+- english_on_dutch_politics
+- english_on_english_politics
+- english_on_foreign_affairs
+- english_on_legal_or_procedural
+- english_on_relevant_religious
+- religious_only
+- local/municipal_only
+- other_foreign_affairs
+- other

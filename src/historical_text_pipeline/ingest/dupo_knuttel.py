@@ -4,6 +4,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
+from historical_text_pipeline.db.models import (
+    Document,
+    DupoMetadata,
+)
+from historical_text_pipeline.domain import Source
 from historical_text_pipeline.ocr.base import OcrBackend
 from historical_text_pipeline.ocr.pdf_rendering import (
     render_first_pdf_page_knuttel_region_as_jpeg,
@@ -48,6 +55,20 @@ class KnuttelExtraction:
     used_embedded_image_fallback: bool = False
     embedded_images_checked: int = 0
 
+class DupoKnuttelError(Exception):
+    """Raised when Knuttel metadata cannot be processed."""
+
+
+@dataclass(frozen=True, slots=True)
+class KnuttelSaveResult:
+    """Result of attempting to save a Knuttel number."""
+
+    document_id: int
+    knuttel_number: str | None
+    candidates: tuple[str, ...]
+    saved: bool
+    skipped_existing: bool
+    used_embedded_image_fallback: bool
 
 def _unique_in_order(values: list[str]) -> tuple[str, ...]:
     """Remove duplicate strings while preserving their order."""
@@ -213,3 +234,85 @@ def extract_knuttel_number_from_first_page(
         ),
         embedded_images_checked=embedded_images_checked,
     )
+    
+def extract_and_save_knuttel_number(
+        session: Session,
+        *,
+        document_id: int,
+        backend: OcrBackend,
+        dpi: int = 300,
+        jpeg_quality: int = 95,
+        overwrite: bool = False,
+    ) -> KnuttelSaveResult:
+        """
+        Extract and save the Knuttel number for one DUPO document.
+
+        Existing metadata is not overwritten unless overwrite=True.
+        An ambiguous extraction is never saved.
+        """
+
+        document = session.get(Document, document_id)
+
+        if document is None:
+            raise DupoKnuttelError(
+                f"Document {document_id} does not exist."
+            )
+
+        if document.source != Source.DUPO:
+            raise DupoKnuttelError(
+                f"Document {document_id} is not a DUPO document."
+            )
+
+        if document.source_path is None:
+            raise DupoKnuttelError(
+                f"Document {document_id} has no source path."
+            )
+
+        if document.dupo is None:
+            document.dupo = DupoMetadata()
+
+        existing_number = document.dupo.knuttel_number
+
+        if existing_number and not overwrite:
+            return KnuttelSaveResult(
+                document_id=document.id,
+                knuttel_number=existing_number,
+                candidates=(existing_number,),
+                saved=False,
+                skipped_existing=True,
+                used_embedded_image_fallback=False,
+            )
+
+        extraction = extract_knuttel_number_from_first_page(
+            Path(document.source_path),
+            backend=backend,
+            dpi=dpi,
+            jpeg_quality=jpeg_quality,
+        )
+
+        # Do not replace or clear metadata unless one number was identified.
+        if extraction.knuttel_number is None:
+            return KnuttelSaveResult(
+                document_id=document.id,
+                knuttel_number=None,
+                candidates=extraction.candidates,
+                saved=False,
+                skipped_existing=False,
+                used_embedded_image_fallback=(
+                    extraction.used_embedded_image_fallback
+                ),
+            )
+
+        document.dupo.knuttel_number = extraction.knuttel_number
+        session.flush()
+
+        return KnuttelSaveResult(
+            document_id=document.id,
+            knuttel_number=extraction.knuttel_number,
+            candidates=extraction.candidates,
+            saved=True,
+            skipped_existing=False,
+            used_embedded_image_fallback=(
+                extraction.used_embedded_image_fallback
+            ),
+        )
