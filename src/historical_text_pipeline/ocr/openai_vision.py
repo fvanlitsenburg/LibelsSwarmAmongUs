@@ -91,7 +91,11 @@ class OpenAiOcrBackend:
         image_bytes: bytes,
         *,
         mime_type: str = "image/jpeg",
+        include_embedded_images: bool = False,
     ) -> OcrPageResult:
+        """Transcribe one historical document image."""
+
+        del include_embedded_images
         """Transcribe one historical document image."""
 
         if not image_bytes:

@@ -1,12 +1,16 @@
 """Mistral Document AI implementation of the OCR backend."""
 
-from base64 import b64encode
+from base64 import b64decode, b64encode
+from binascii import Error as Base64DecodeError
 from typing import Any
 
 import httpx
 
 from historical_text_pipeline.config.settings import Settings
-from historical_text_pipeline.ocr.base import OcrPageResult
+from historical_text_pipeline.ocr.base import (
+    OcrEmbeddedImage,
+    OcrPageResult,
+)
 
 
 class MistralOcrError(Exception):
@@ -69,6 +73,7 @@ class MistralOcrBackend:
         image_bytes: bytes,
         *,
         mime_type: str = "image/jpeg",
+        include_embedded_images: bool = False,
     ) -> OcrPageResult:
         """Transcribe one page image with Mistral OCR."""
 
@@ -100,7 +105,7 @@ class MistralOcrBackend:
                         "image_url": image_data_url,
                     },
                     # We only need transcription text at this stage.
-                    "include_image_base64": False,
+                    "include_image_base64": include_embedded_images,
                     "include_blocks": False,
                 },
             )
@@ -117,6 +122,7 @@ class MistralOcrBackend:
 
         payload = self._read_response(response)
         transcription = self._extract_text(payload)
+        embedded_images = self._extract_embedded_images(payload)
 
         response_id = (
             response.headers.get("x-request-id")
@@ -126,11 +132,12 @@ class MistralOcrBackend:
         model = payload.get("model", self._model)
 
         return OcrPageResult(
-            provider=self.provider_name,
-            model=str(model),
-            text=transcription,
-            response_id=response_id,
-        )
+        provider=self.provider_name,
+        model=str(model),
+        text=transcription,
+        response_id=response_id,
+        embedded_images=embedded_images,
+    )
 
     @staticmethod
     def _read_response(
@@ -200,3 +207,98 @@ class MistralOcrBackend:
             )
 
         return transcription
+    @classmethod
+    def _extract_embedded_images(
+        cls,
+        payload: dict[str, Any],
+    ) -> tuple[OcrEmbeddedImage, ...]:
+        """Decode image regions extracted by Mistral OCR."""
+
+        pages = payload.get("pages")
+
+        if not isinstance(pages, list):
+            return ()
+
+        extracted_images: list[OcrEmbeddedImage] = []
+
+        for page_index, page in enumerate(pages):
+            if not isinstance(page, dict):
+                continue
+
+            images = page.get("images")
+
+            if not isinstance(images, list):
+                continue
+
+            for image_index, image in enumerate(images):
+                if not isinstance(image, dict):
+                    continue
+
+                encoded_image = image.get("image_base64")
+
+                if not isinstance(encoded_image, str):
+                    continue
+
+                decoded = cls._decode_embedded_image(encoded_image)
+
+                if decoded is None:
+                    continue
+
+                mime_type, image_bytes = decoded
+
+                image_id = str(
+                    image.get(
+                        "id",
+                        f"page-{page_index}-image-{image_index}",
+                    )
+                )
+
+                extracted_images.append(
+                    OcrEmbeddedImage(
+                        image_id=image_id,
+                        mime_type=mime_type,
+                        image_bytes=image_bytes,
+                    )
+                )
+
+        return tuple(extracted_images)
+
+
+    @staticmethod
+    def _decode_embedded_image(
+        value: str,
+    ) -> tuple[str, bytes] | None:
+        """Decode a raw base64 string or base64 data URL."""
+
+        mime_type = "image/jpeg"
+        encoded_value = value
+
+        if value.startswith("data:"):
+            header, separator, encoded_value = value.partition(",")
+
+            if not separator:
+                return None
+
+            declared_type = header.removeprefix("data:").split(
+                ";",
+                maxsplit=1,
+            )[0]
+
+            if declared_type:
+                mime_type = declared_type
+
+        encoded_value = "".join(encoded_value.split())
+        encoded_value += "=" * (-len(encoded_value) % 4)
+
+        try:
+            image_bytes = b64decode(
+                encoded_value,
+                validate=True,
+            )
+        except (Base64DecodeError, ValueError):
+            return None
+
+        if not image_bytes:
+            return None
+
+        return mime_type, image_bytes

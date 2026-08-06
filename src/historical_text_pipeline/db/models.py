@@ -378,6 +378,21 @@ class DocumentTextUnit(Base):
     document: Mapped[Document] = relationship(
         back_populates="text_units",
     )
+    
+    ocr_provider: Mapped[str | None] = mapped_column(
+    String(50),
+    nullable=True,
+    )
+
+    ocr_model: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+
+    provider_response_id: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
 
 
 class RelevanceAssessment(Base):
