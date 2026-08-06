@@ -9,8 +9,8 @@ class OcrPageResult:
     """Text returned after recognizing one page image."""
 
     provider: str
-    model_id: str
-    process_id: str
+    model: str
+    response_id: str
     text: str
 
 
@@ -20,5 +20,7 @@ class OcrBackend(Protocol):
     def recognize_image(
         self,
         image_bytes: bytes,
+        *,
+        mime_type: str = "image/jpeg",
     ) -> OcrPageResult:
         """Recognize the text contained in one image."""

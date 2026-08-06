@@ -20,25 +20,13 @@ class Settings(BaseSettings):
     test_database_url: str
     dupo_root: Path
 
-    transkribus_api_base_url: str = (
-        "https://transkribus.eu/processing/v1"
-    )
-    transkribus_token_url: str = (
-        "https://account.readcoop.eu/auth/realms/readcoop/"
-        "protocol/openid-connect/token"
-    )
-    
-    transkribus_client_id: str = "processing-api-client"
-    
-    transkribus_model_id: int
-    transkribus_username: str
-    transkribus_password: SecretStr
-
-    transkribus_poll_interval_seconds: float = 3.0
-    transkribus_timeout_seconds: float = 300.0
+    openai_api_key: SecretStr | None = None
+    openai_ocr_model: str = "gpt-5.5"
+    openai_ocr_max_output_tokens: int = 12_000
+    openai_timeout_seconds: float = 300.0
 
     pdf_render_dpi: int = 300
-    pdf_jpeg_quality: int = 90
+    pdf_jpeg_quality: int = 95
 
 
 @lru_cache
