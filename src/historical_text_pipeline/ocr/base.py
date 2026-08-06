@@ -10,8 +10,8 @@ class OcrPageResult:
 
     provider: str
     model: str
-    response_id: str
     text: str
+    response_id: str | None = None
 
 
 class OcrBackend(Protocol):
@@ -24,3 +24,6 @@ class OcrBackend(Protocol):
         mime_type: str = "image/jpeg",
     ) -> OcrPageResult:
         """Recognize the text contained in one image."""
+
+    def close(self) -> None:
+        """Release network resources."""

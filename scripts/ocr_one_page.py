@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 
 from historical_text_pipeline.config.settings import get_settings
-from historical_text_pipeline.ocr.openai_vision import (
-    OpenAiOcrBackend,
+from historical_text_pipeline.ocr.factory import (
+    create_ocr_backend,
 )
 from historical_text_pipeline.ocr.pdf_rendering import (
     render_pdf_page_as_jpeg,
@@ -54,11 +54,10 @@ def main() -> None:
         f"{image_size_kb:.0f} KB"
     )
     print(
-        f"Submitting to OpenAI model "
-        f"{settings.openai_ocr_model}..."
+    f"Submitting to {settings.ocr_provider} OCR..."
     )
 
-    backend = OpenAiOcrBackend.from_settings(settings)
+    backend = create_ocr_backend(settings)
 
     try:
         result = backend.recognize_image(
@@ -69,8 +68,12 @@ def main() -> None:
         backend.close()
 
     print()
-    print(f"Response ID: {result.response_id}")
-    print(f"Model:       {result.model}")
+    print(f"Provider: {result.provider}")
+    print(f"Model:    {result.model}")
+
+    if result.response_id is not None:
+        print(f"Request:  {result.response_id}")
+
     print()
     print(result.text)
 
