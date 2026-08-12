@@ -18,6 +18,7 @@ class DupoBatchStage(StrEnum):
     RELEVANCE = "relevance"
     OCR = "ocr"
     FINAL = "final"
+    PIPELINE = "pipeline"
 
 
 EXCLUDED_PROCESSING_STATUSES = (
@@ -91,6 +92,38 @@ def get_dupo_batch_document_ids(
                     )
                 ),
             ]
+        )
+
+    elif stage == DupoBatchStage.PIPELINE:
+        conditions.append(
+            or_(
+                # Not yet resolved for relevance.
+                Document.relevance_status.in_(
+                    (
+                        RelevanceStatus.NOT_ASSESSED,
+                        RelevanceStatus.UNCERTAIN,
+                    )
+                ),
+
+                # Relevant, but OCR still incomplete.
+                (
+                    (Document.relevance_status == RelevanceStatus.RELEVANT)
+                    & (Document.text_complete.is_(False))
+                ),
+
+                # Complete text but no final assessment yet.
+                (
+                    (Document.text_complete.is_(True))
+                    & or_(
+                        Document.summary.is_(None),
+                        Document.summary == "",
+                    )
+                    & (
+                        Document.relevance_status
+                        != RelevanceStatus.IRRELEVANT
+                    )
+                ),
+            )
         )
 
     else:

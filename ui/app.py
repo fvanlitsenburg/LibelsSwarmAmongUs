@@ -1102,6 +1102,9 @@ def show_batch_runs() -> None:
                 DupoBatchStage.FINAL: (
                     "Final assessment — complete OCR"
                 ),
+                DupoBatchStage.PIPELINE: (
+                "Full pipeline — relevance → OCR → final"
+                ),
             }[value],
         )
 

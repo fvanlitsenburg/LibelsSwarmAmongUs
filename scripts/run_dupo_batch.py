@@ -31,6 +31,11 @@ STAGE_SCRIPTS = {
         / "scripts"
         / "finalize_dupo_document.py"
     ),
+    DupoBatchStage.PIPELINE: (
+        REPOSITORY_ROOT
+        / "scripts"
+        / "process_dupo_document.py"
+    ),
 }
 
 
