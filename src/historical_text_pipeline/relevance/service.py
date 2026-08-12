@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 
 from historical_text_pipeline.db.models import (
     Document,
+    DocumentProviderState,
     DocumentTextUnit,
     RelevanceAssessment,
 )
 from historical_text_pipeline.domain import (
+    AnalysisProvider,
     ClassificationStatus,
     RelevanceStatus,
     Source,
@@ -47,6 +49,7 @@ def get_latest_assessment(
     session: Session,
     *,
     document_id: int,
+    provider: AnalysisProvider = AnalysisProvider.OPENAI,
 ) -> RelevanceAssessment | None:
     """Return the most recent assessment for a document."""
 
@@ -54,9 +57,10 @@ def get_latest_assessment(
         select(RelevanceAssessment)
         .where(
             RelevanceAssessment.document_id == document_id,
+            RelevanceAssessment.provider == provider.value,
         )
         .order_by(
-            RelevanceAssessment.sequence_number.desc(),
+            RelevanceAssessment.sequence_number.desc()
         )
         .limit(1)
     )
@@ -67,8 +71,9 @@ def get_next_batch_end_page(
     *,
     document_id: int,
     batch_size: int,
+    provider: AnalysisProvider = AnalysisProvider.OPENAI,
 ) -> int | None:
-    """Return the last page number of the next assessment batch."""
+    """Return the last page number of the provider's next batch."""
 
     if batch_size < 1:
         raise ValueError("Batch size must be at least one.")
@@ -88,6 +93,7 @@ def get_next_batch_end_page(
     latest = get_latest_assessment(
         session,
         document_id=document_id,
+        provider=provider,
     )
 
     previously_assessed = (
@@ -103,7 +109,32 @@ def get_next_batch_end_page(
         previously_assessed + batch_size,
         document.total_units,
     )
+    
+def _provider_relevance_status(
+    *,
+    output: RelevanceAssessmentOutput,
+    stop_confirmed: bool,
+    final_progressive_assessment: bool,
+) -> RelevanceStatus:
+    """Determine this provider's current document-level conclusion."""
 
+    if output.decision == RelevanceDecision.CONTINUE:
+        return RelevanceStatus.RELEVANT
+
+    if stop_confirmed:
+        return RelevanceStatus.IRRELEVANT
+
+    if (
+        final_progressive_assessment
+        and output.decision
+        in (
+            RelevanceDecision.STOP,
+            RelevanceDecision.UNCERTAIN,
+        )
+    ):
+        return RelevanceStatus.IRRELEVANT
+
+    return RelevanceStatus.UNCERTAIN
 
 def build_accumulated_page_text(
     session: Session,
@@ -207,8 +238,9 @@ def assess_and_store_relevance(
     criteria: str,
     assessor: RelevanceAssessor,
     stop_confidence_threshold: float = 0.80,
+    max_assessments: int = 4,
 ) -> StoredRelevanceResult:
-    """Assess accumulated OCR text and save the result."""
+    """Assess accumulated OCR text and save the provider-specific result."""
 
     document = session.get(Document, document_id)
 
@@ -222,9 +254,11 @@ def assess_and_store_relevance(
             f"Document {document_id} is not a DUPO document."
         )
 
+    # IMPORTANT: previous assessment from this provider only.
     previous = get_latest_assessment(
         session,
         document_id=document_id,
+        provider=assessor.provider,
     )
 
     assessment_number = (
@@ -233,18 +267,33 @@ def assess_and_store_relevance(
         else 1
     )
 
+    final_progressive_assessment = (
+        assessment_number >= max_assessments
+    )
+
     text = build_accumulated_page_text(
         session,
         document_id=document_id,
         through_page=through_page,
     )
 
-    output = assessor.assess(
+    run = assessor.assess(
         text=text,
         criteria=criteria,
         assessment_number=assessment_number,
+        final_progressive_assessment=(
+            final_progressive_assessment
+        ),
     )
 
+    if run.provider != assessor.provider:
+        raise RelevanceServiceError(
+            "Relevance assessor returned a mismatched provider."
+        )
+
+    output = run.output
+
+    # This represents what the individual model call said.
     assessment_status = _assessment_status(
         output.decision
     )
@@ -254,6 +303,15 @@ def assess_and_store_relevance(
         previous=previous,
         through_page=through_page,
         confidence_threshold=stop_confidence_threshold,
+    )
+
+    # This represents this provider's current conclusion.
+    provider_status = _provider_relevance_status(
+        output=output,
+        stop_confirmed=stop_confirmed,
+        final_progressive_assessment=(
+            final_progressive_assessment
+        ),
     )
 
     classification_status = (
@@ -275,34 +333,58 @@ def assess_and_store_relevance(
         classification_status=classification_status,
         supporting_evidence=output.supporting_evidence,
         missing_information=output.missing_information,
+        provider=run.provider.value,
+        model=run.model,
+        prompt_version=run.prompt_version,
+        response_id=run.response_id,
+        input_tokens=run.input_tokens,
+        output_tokens=run.output_tokens,
     )
 
     session.add(stored_assessment)
+    
+    update_provider_state(
+        session,
+        document=document,
+        provider=run.provider,
+        relevance_status=provider_status,
+        relevance_score=output.relevance_score,
+        confidence=output.confidence,
+        category=output.category,
+        topic=output.topic,
+        reason=output.reason,
+        assessment_number=assessment_number,
+        units_processed=through_page,
+    )
 
-    document.relevance_score = output.relevance_score
-    document.relevance_confidence = output.confidence
-    document.relevance_reason = output.reason
-    document.primary_category = output.category
-    document.topic = output.topic
-    document.classification_status = classification_status
+    # Only OpenAI currently controls the canonical Document fields.
+    if run.provider == AnalysisProvider.OPENAI:
+        document.relevance_status = provider_status
+        document.relevance_score = output.relevance_score
+        document.relevance_confidence = output.confidence
+        document.relevance_reason = output.reason
+        document.primary_category = output.category
+        document.topic = output.topic
 
-    if output.decision == RelevanceDecision.CONTINUE:
-        document.relevance_status = RelevanceStatus.RELEVANT
-        document.processing_status = "relevance_confirmed"
+        if provider_status == RelevanceStatus.RELEVANT:
+            document.processing_status = (
+                "relevance_confirmed"
+            )
 
-    elif stop_confirmed:
-        document.relevance_status = RelevanceStatus.IRRELEVANT
-        document.processing_status = "relevance_stopped"
+        elif provider_status == RelevanceStatus.IRRELEVANT:
+            document.processing_status = (
+                "relevance_stopped"
+            )
 
-    else:
-        # A first STOP or an UNCERTAIN result requires another batch.
-        document.relevance_status = RelevanceStatus.UNCERTAIN
+        elif output.decision == RelevanceDecision.STOP:
+            document.processing_status = (
+                "relevance_stop_pending"
+            )
 
-        document.processing_status = (
-            "relevance_stop_pending"
-            if output.decision == RelevanceDecision.STOP
-            else "relevance_uncertain"
-        )
+        else:
+            document.processing_status = (
+                "relevance_uncertain"
+            )
 
     session.flush()
 
@@ -311,11 +393,87 @@ def assess_and_store_relevance(
         assessment_number=assessment_number,
         pages_assessed=through_page,
         decision=output.decision,
-        relevance_status=document.relevance_status,
+        relevance_status=provider_status,
         relevance_score=output.relevance_score,
         confidence=output.confidence,
         category=output.category,
         topic=output.topic,
         reason=output.reason,
-        stop_confirmed=stop_confirmed,
+        stop_confirmed=(
+            stop_confirmed
+            or (
+                final_progressive_assessment
+                and provider_status
+                == RelevanceStatus.IRRELEVANT
+            )
+        ),
     )
+    
+def get_provider_state(
+    session: Session,
+    *,
+    document_id: int,
+    provider: AnalysisProvider,
+) -> DocumentProviderState | None:
+    """Return the current state for one provider."""
+
+    return session.scalar(
+        select(DocumentProviderState)
+        .where(
+            DocumentProviderState.document_id
+            == document_id,
+            DocumentProviderState.provider
+            == provider.value,
+        )
+        .limit(1)
+    )
+    
+def update_provider_state(
+    session: Session,
+    *,
+    document: Document,
+    provider: AnalysisProvider,
+    relevance_status: RelevanceStatus,
+    relevance_score: float,
+    confidence: float,
+    category: str,
+    topic: str,
+    reason: str,
+    assessment_number: int,
+    units_processed: int,
+) -> DocumentProviderState:
+    """Create or update the provider's current document state."""
+
+    state = get_provider_state(
+        session,
+        document_id=document.id,
+        provider=provider,
+    )
+
+    if state is None:
+        state = DocumentProviderState(
+            document_id=document.id,
+            provider=provider.value,
+            relevance_status=relevance_status.value,
+            relevance_score=relevance_score,
+            confidence=confidence,
+            primary_category=category,
+            topic=topic,
+            relevance_reason=reason,
+            last_assessment_number=assessment_number,
+            units_processed=units_processed,
+        )
+
+        session.add(state)
+
+    else:
+        state.relevance_status = relevance_status.value
+        state.relevance_score = relevance_score
+        state.confidence = confidence
+        state.primary_category = category
+        state.topic = topic
+        state.relevance_reason = reason
+        state.last_assessment_number = assessment_number
+        state.units_processed = units_processed
+
+    return state

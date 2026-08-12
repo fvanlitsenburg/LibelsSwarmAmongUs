@@ -4,8 +4,13 @@ import openai
 from openai import OpenAI
 
 from historical_text_pipeline.config.settings import Settings
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+)
 from historical_text_pipeline.relevance.base import (
+    RELEVANCE_PROMPT_VERSION,
     RelevanceAssessmentOutput,
+    RelevanceAssessmentRun,
 )
 
 RELEVANCE_INSTRUCTIONS = """
@@ -51,6 +56,12 @@ class OpenAiRelevanceError(Exception):
 
 class OpenAiRelevanceAssessor:
     """Assess OCR text with a small OpenAI text model."""
+    
+    @property
+    def provider(self) -> AnalysisProvider:
+        """Return the provider represented by this assessor."""
+
+        return AnalysisProvider.OPENAI
 
     def __init__(
         self,
@@ -228,4 +239,19 @@ AVAILABLE OCR TEXT
                 f"Response ID: {response.id}."
             )
 
-        return result
+        input_tokens: int | None = None
+        output_tokens: int | None = None
+
+        if response.usage is not None:
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+
+        return RelevanceAssessmentRun(
+            output=result,
+            provider=AnalysisProvider.OPENAI,
+            model=str(response.model),
+            prompt_version=RELEVANCE_PROMPT_VERSION,
+            response_id=response.id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )

@@ -1,5 +1,9 @@
 """Progressive relevance assessment."""
 
+from historical_text_pipeline.relevance.anthropic_final_assessor import (
+    AnthropicFinalAssessmentError,
+    AnthropicFinalAssessor,
+)
 from historical_text_pipeline.relevance.base import (
     RelevanceAssessmentOutput,
     RelevanceAssessor,
@@ -34,6 +38,8 @@ from historical_text_pipeline.relevance.service import (
 )
 
 __all__ = [
+    "AnthropicFinalAssessmentError",
+    "AnthropicFinalAssessor",
     "FinalAssessmentOutput",
     "FinalAssessmentRun",
     "FinalAssessmentServiceError",

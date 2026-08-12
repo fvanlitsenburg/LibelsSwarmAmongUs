@@ -106,6 +106,7 @@ def main() -> None:
             session,
             document_id=document_id,
             batch_size=settings.relevance_batch_size,
+            provider=assessor.provider,
         )
 
     if end_page is None:

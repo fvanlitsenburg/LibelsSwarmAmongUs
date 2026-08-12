@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from math import ceil
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from historical_text_pipeline.db.models import (
@@ -23,6 +24,7 @@ from historical_text_pipeline.relevance.final_assessment import (
 from historical_text_pipeline.relevance.service import (
     build_accumulated_page_text,
     get_latest_assessment,
+    update_provider_state,
 )
 
 
@@ -118,6 +120,7 @@ def store_final_assessment_run(
     latest = get_latest_assessment(
         session,
         document_id=document.id,
+        provider=run.provider,
     )
 
     assessment_number = (
@@ -169,9 +172,29 @@ def store_final_assessment_run(
         classification_status=ClassificationStatus.FULL_TEXT,
         supporting_evidence=output.supporting_evidence,
         missing_information=output.caveats,
+        provider=run.provider.value,
+        model=run.model,
+        prompt_version=run.prompt_version,
+        response_id=run.response_id,
+        input_tokens=run.input_tokens,
+        output_tokens=run.output_tokens,
     )
 
     session.add(assessment)
+    
+    update_provider_state(
+        session,
+        document=document,
+        provider=run.provider,
+        relevance_status=relevance_status,
+        relevance_score=output.relevance_score,
+        confidence=output.confidence,
+        category=output.category,
+        topic=output.topic,
+        reason=output.relevance_explanation,
+        assessment_number=assessment_number,
+        units_processed=document.total_units or 0,
+    )
 
     if run.provider == AnalysisProvider.OPENAI:
         document.relevance_status = relevance_status
@@ -263,9 +286,20 @@ def assess_and_store_final_full_text(
             f"Document {document_id} has no recorded page count."
         )
 
-    if document.summary and not overwrite:
+    existing_analysis = session.scalar(
+        select(DocumentAnalysis.id)
+        .where(
+            DocumentAnalysis.document_id == document.id,
+            DocumentAnalysis.provider == assessor.provider.value,
+        )
+        .order_by(DocumentAnalysis.id.desc())
+        .limit(1)
+    )
+
+    if existing_analysis is not None and not overwrite:
         raise FinalAssessmentServiceError(
-            f"Document {document_id} already has a final summary. "
+            f"Document {document_id} already has a final "
+            f"{assessor.provider.value} analysis. "
             "Use overwrite=True to reassess it."
         )
 

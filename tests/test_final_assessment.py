@@ -398,3 +398,40 @@ def test_anthropic_analysis_does_not_replace_canonical_openai_result(
             "OpenAI category"
         )
         assert document.topic == "OpenAI topic"
+        
+def test_duplicate_provider_analysis_is_rejected(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"fake PDF")
+
+    with Session(db_engine) as session:
+        document = add_complete_document(
+            session,
+            pdf_path,
+        )
+
+        assessor = FakeFinalAssessor(
+            provider=AnalysisProvider.ANTHROPIC,
+        )
+
+        assess_and_store_final_full_text(
+            session,
+            document_id=document.id,
+            criteria="Test criteria.",
+            assessor=assessor,
+        )
+
+        session.commit()
+
+        with pytest.raises(
+            FinalAssessmentServiceError,
+            match="already has a final anthropic analysis",
+        ):
+            assess_and_store_final_full_text(
+                session,
+                document_id=document.id,
+                criteria="Test criteria.",
+                assessor=assessor,
+            )

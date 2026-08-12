@@ -18,6 +18,7 @@ def test_database_schema_is_created(db_engine: Engine) -> None:
     assert table_names == {
         "documents",
         "document_analyses",
+        "document_provider_states",
         "document_text_units",
         "dupo_metadata",
         "relevance_assessments",

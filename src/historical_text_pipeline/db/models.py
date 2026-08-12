@@ -246,6 +246,11 @@ class Document(Base):
         cascade="all, delete-orphan",
         order_by="DocumentAnalysis.created_at",
     )
+    
+    provider_states: Mapped[list["DocumentProviderState"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
 
 
 class DupoMetadata(Base):
@@ -410,11 +415,12 @@ class RelevanceAssessment(Base):
     __table_args__ = (
         UniqueConstraint(
             "document_id",
+            "provider",
             "sequence_number",
-            name="uq_relevance_assessment_sequence",
+            name="uq_relevance_document_provider_sequence",
         ),
     )
-
+    
     id: Mapped[int] = mapped_column(primary_key=True)
 
     document_id: Mapped[int] = mapped_column(
@@ -635,4 +641,91 @@ class DocumentAnalysis(Base):
 
     document: Mapped["Document"] = relationship(
         back_populates="analyses",
+    )
+    
+    
+class DocumentProviderState(Base):
+    """Current analytical state of one document for one provider."""
+
+    __tablename__ = "document_provider_states"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "provider",
+            name="uq_document_provider_state",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "documents.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    provider: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        index=True,
+    )
+
+    relevance_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    relevance_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    confidence: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    primary_category: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    topic: Mapped[str | None] = mapped_column(
+        String(250),
+        nullable=True,
+    )
+
+    relevance_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    last_assessment_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    units_processed: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    document: Mapped["Document"] = relationship(
+        back_populates="provider_states",
     )

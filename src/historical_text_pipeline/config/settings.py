@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     pdf_render_dpi: int = 300
     pdf_jpeg_quality: int = 95
     
+    anthropic_api_key: SecretStr | None = None
+    anthropic_relevance_model: str = "claude-haiku-4-5"
+    anthropic_relevance_max_output_tokens: int = 2_000
+    
+    anthropic_final_model: str = "claude-sonnet-5"
+    anthropic_final_max_output_tokens: int = 4_000
+    anthropic_final_effort: Literal[
+    "low",
+    "medium",
+    "high",
+] = "low"
+
+    anthropic_timeout_seconds: float = 300.0
+    
     openai_relevance_model: str = "gpt-5-nano"
     openai_relevance_max_output_tokens: int = 4_000
     openai_relevance_reasoning_effort: str = "low"
@@ -50,6 +64,7 @@ class Settings(BaseSettings):
     relevance_batch_size: int = 3
     relevance_stop_confidence_threshold: float = 0.80
     relevance_criteria_path: Path = Path("relevance_criteria.txt")
+    relevance_max_assessments: int = 4
     
 
 

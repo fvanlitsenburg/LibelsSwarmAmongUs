@@ -1,10 +1,16 @@
 """Shared types for relevance assessment."""
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+)
+
+RELEVANCE_PROMPT_VERSION = "relevance-v1"
 
 class RelevanceDecision(StrEnum):
     """Action recommended after reading the available text."""
@@ -12,10 +18,11 @@ class RelevanceDecision(StrEnum):
     CONTINUE = "continue"
     STOP = "stop"
     UNCERTAIN = "uncertain"
-
+    
 
 class RelevanceAssessmentOutput(BaseModel):
     """Structured assessment returned by the language model."""
+    
 
     model_config = ConfigDict(extra="forbid")
 
@@ -62,10 +69,26 @@ class RelevanceAssessmentOutput(BaseModel):
         default_factory=list,
         max_length=5,
     )
+   
+@dataclass(frozen=True, slots=True)
+class RelevanceAssessmentRun:
+    """One provider's progressive relevance call."""
 
+    output: RelevanceAssessmentOutput
+    provider: AnalysisProvider
+    model: str
+    prompt_version: str
+    response_id: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    
 
 class RelevanceAssessor(Protocol):
-    """Interface implemented by a relevance-assessment provider."""
+    """Interface for progressive relevance assessment."""
+
+    @property
+    def provider(self) -> AnalysisProvider:
+        """Return the analysis provider."""
 
     def assess(
         self,
@@ -73,8 +96,9 @@ class RelevanceAssessor(Protocol):
         text: str,
         criteria: str,
         assessment_number: int,
-    ) -> RelevanceAssessmentOutput:
-        """Assess the available document text."""
+        final_progressive_assessment: bool = False,
+    ) -> RelevanceAssessmentRun:
+        """Assess the accumulated document text."""
 
     def close(self) -> None:
-        """Release network resources."""
+        """Release resources."""
