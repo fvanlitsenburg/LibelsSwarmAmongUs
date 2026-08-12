@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from historical_text_pipeline.db.base import Base
 from historical_text_pipeline.domain import (
+    AnalysisProvider,
     ClassificationStatus,
     RelevanceStatus,
     Source,
@@ -238,6 +239,12 @@ class Document(Base):
     relevance_assessments: Mapped[list["RelevanceAssessment"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
+    )
+    
+    analyses: Mapped[list["DocumentAnalysis"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentAnalysis.created_at",
     )
 
 
@@ -487,4 +494,145 @@ class RelevanceAssessment(Base):
 
     document: Mapped[Document] = relationship(
         back_populates="relevance_assessments",
+    )
+    
+    provider: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default=AnalysisProvider.OPENAI.value,
+        server_default=AnalysisProvider.OPENAI.value,
+    )
+
+    model: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+
+    prompt_version: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="legacy",
+        server_default="legacy",
+    )
+
+    response_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    input_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    output_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    
+class DocumentAnalysis(Base):
+    """One final full-text analysis produced by one model run."""
+
+    __tablename__ = "document_analyses"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "documents.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    provider: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        index=True,
+    )
+
+    model: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+    )
+
+    prompt_version: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    decision: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    relevance_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    confidence: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    primary_category: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    topic: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    relevance_explanation: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    summary: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    supporting_evidence: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+    )
+
+    caveats: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+    )
+
+    response_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    input_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    output_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    document: Mapped["Document"] = relationship(
+        back_populates="analyses",
     )

@@ -7,9 +7,11 @@ from sqlalchemy.orm import Session
 
 from historical_text_pipeline.db.models import (
     Document,
+    DocumentAnalysis,
     RelevanceAssessment,
 )
 from historical_text_pipeline.domain import (
+    AnalysisProvider,
     ClassificationStatus,
     RelevanceStatus,
 )
@@ -46,6 +48,9 @@ class StoredFinalAssessmentResult:
     model: str
     input_tokens: int | None
     output_tokens: int | None
+    provider: AnalysisProvider
+    model: str
+    prompt_version: str
 
 
 def estimate_text_tokens(text: str) -> int:
@@ -126,6 +131,31 @@ def store_final_assessment_run(
         output.decision
     )
 
+    analysis = DocumentAnalysis(
+        document_id=document.id,
+        provider=run.provider.value,
+        model=run.model,
+        prompt_version=run.prompt_version,
+        decision=output.decision.value,
+        relevance_score=output.relevance_score,
+        confidence=output.confidence,
+        primary_category=output.category,
+        topic=output.topic,
+        relevance_explanation=(
+            output.relevance_explanation
+        ),
+        summary=output.summary,
+        supporting_evidence=(
+            output.supporting_evidence
+        ),
+        caveats=output.caveats,
+        response_id=run.response_id,
+        input_tokens=run.input_tokens,
+        output_tokens=run.output_tokens,
+    )
+
+    session.add(analysis)
+
     assessment = RelevanceAssessment(
         document_id=document.id,
         sequence_number=assessment_number,
@@ -143,17 +173,35 @@ def store_final_assessment_run(
 
     session.add(assessment)
 
-    document.relevance_status = relevance_status
-    document.relevance_score = output.relevance_score
-    document.relevance_confidence = output.confidence
-    document.relevance_reason = output.relevance_explanation
-    document.primary_category = output.category
-    document.topic = output.topic
-    document.summary = output.summary
-    document.classification_status = (
-        ClassificationStatus.FULL_TEXT
-    )
-    document.error_message = None
+    if run.provider == AnalysisProvider.OPENAI:
+        document.relevance_status = relevance_status
+        document.relevance_score = output.relevance_score
+        document.relevance_confidence = output.confidence
+        document.relevance_reason = (
+            output.relevance_explanation
+        )
+        document.primary_category = output.category
+        document.topic = output.topic
+        document.summary = output.summary
+        document.classification_status = (
+            ClassificationStatus.FULL_TEXT
+        )
+        document.error_message = None
+
+        if relevance_status == RelevanceStatus.RELEVANT:
+            document.processing_status = (
+                "analysis_complete"
+            )
+
+        elif relevance_status == RelevanceStatus.IRRELEVANT:
+            document.processing_status = (
+                "final_irrelevant"
+            )
+
+        else:
+            document.processing_status = (
+                "needs_manual_review"
+            )
 
     if relevance_status == RelevanceStatus.RELEVANT:
         document.processing_status = "analysis_complete"
@@ -169,6 +217,9 @@ def store_final_assessment_run(
     return StoredFinalAssessmentResult(
         document_id=document.id,
         assessment_number=assessment_number,
+        provider=run.provider,
+        model=run.model,
+        prompt_version=run.prompt_version,
         decision=output.decision,
         relevance_status=relevance_status,
         relevance_score=output.relevance_score,
@@ -176,9 +227,10 @@ def store_final_assessment_run(
         category=output.category,
         topic=output.topic,
         summary=output.summary,
-        relevance_explanation=output.relevance_explanation,
-        response_id=run.response_id,
-        model=run.model,
+        relevance_explanation=(
+            output.relevance_explanation
+        ),
+        response_id=run.response_id or "",
         input_tokens=run.input_tokens,
         output_tokens=run.output_tokens,
     )

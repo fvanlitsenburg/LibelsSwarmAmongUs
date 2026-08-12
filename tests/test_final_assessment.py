@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 
 from historical_text_pipeline.db.models import (
     Document,
+    DocumentAnalysis,
     DocumentTextUnit,
     DupoMetadata,
     RelevanceAssessment,
 )
 from historical_text_pipeline.domain import (
+    AnalysisProvider,
     ClassificationStatus,
     RelevanceStatus,
     Source,
@@ -30,7 +32,26 @@ from historical_text_pipeline.relevance.final_service import (
 
 
 class FakeFinalAssessor:
-    """Return one predetermined final assessment."""
+    """Return a predetermined final assessment."""
+
+    def __init__(
+        self,
+        *,
+        provider: AnalysisProvider = AnalysisProvider.OPENAI,
+        category: str = "political polemic",
+        topic: str = "Conflict over public authority",
+        summary: str = "A test summary.",
+    ) -> None:
+        self._provider = provider
+        self.category = category
+        self.topic = topic
+        self.summary = summary
+
+    @property
+    def provider(self) -> AnalysisProvider:
+        """Return the provider represented by this fake assessor."""
+
+        return self._provider
 
     def assess(
         self,
@@ -40,7 +61,6 @@ class FakeFinalAssessor:
         document_context: str,
     ) -> FinalAssessmentRun:
         assert "PDF PAGE 1" in text
-        assert "PDF PAGE 2" in text
         assert criteria
         assert document_context
 
@@ -51,29 +71,30 @@ class FakeFinalAssessor:
                 confidence=0.91,
                 relevance_explanation=(
                     "The complete document directly addresses "
-                    "the project's research subject."
+                    "the research subject."
                 ),
-                category="political polemic",
-                topic="Conflict over public authority",
-                summary=(
-                    "The pamphlet presents a sustained political "
-                    "argument about public authority and opposition."
-                ),
+                category=self.category,
+                topic=self.topic,
+                summary=self.summary,
                 supporting_evidence=[
-                    "A short supporting passage.",
+                    "Test evidence.",
                 ],
-                caveats=[
-                    "One passage contains damaged OCR.",
-                ],
+                caveats=[],
             ),
-            response_id="resp_test_final",
-            model="gpt-5-mini",
-            input_tokens=1_200,
+            provider=self.provider,
+            model=(
+                "gpt-test"
+                if self.provider == AnalysisProvider.OPENAI
+                else "claude-test"
+            ),
+            prompt_version="test-v1",
+            response_id="response-test",
+            input_tokens=1200,
             output_tokens=250,
         )
 
     def close(self) -> None:
-        """Match the assessor protocol."""
+        pass
 
 
 def add_complete_document(
@@ -234,3 +255,146 @@ def test_incomplete_document_is_rejected(
                 criteria="Test criteria.",
                 assessor=FakeFinalAssessor(),
             )
+            
+def test_openai_final_assessment_is_stored(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"fake PDF")
+
+    with Session(db_engine) as session:
+        document = add_complete_document(
+            session,
+            pdf_path,
+        )
+
+        result = assess_and_store_final_full_text(
+            session,
+            document_id=document.id,
+            criteria="Test research criteria.",
+            assessor=FakeFinalAssessor(
+                provider=AnalysisProvider.OPENAI,
+            ),
+        )
+
+        session.commit()
+        
+        session.refresh(document)
+
+        assert document.primary_category == (
+            "political polemic"
+        )
+
+        assert document.topic == (
+            "Conflict over public authority"
+        )
+
+        assert document.summary == "A test summary."
+
+        assert document.relevance_status == (
+            RelevanceStatus.RELEVANT
+        )
+
+        analysis = session.scalar(
+            select(DocumentAnalysis).where(
+                DocumentAnalysis.document_id
+                == document.id,
+                DocumentAnalysis.provider
+                == AnalysisProvider.OPENAI.value,
+            )
+        )
+
+        assert analysis is not None
+
+        assert analysis.model == "gpt-test"
+        assert analysis.prompt_version == "test-v1"
+        assert analysis.decision == "relevant"
+
+        assert analysis.relevance_score == pytest.approx(
+            0.94
+        )
+
+        assert analysis.confidence == pytest.approx(
+            0.91
+        )
+
+        assert analysis.primary_category == (
+            "political polemic"
+        )
+
+        assert analysis.topic == (
+            "Conflict over public authority"
+        )
+
+        assert analysis.summary == "A test summary."
+
+        assert result.provider == AnalysisProvider.OPENAI
+        
+def test_anthropic_analysis_does_not_replace_canonical_openai_result(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"fake PDF")
+
+    with Session(db_engine) as session:
+        document = add_complete_document(
+            session,
+            pdf_path,
+        )
+
+        assess_and_store_final_full_text(
+            session,
+            document_id=document.id,
+            criteria="Test criteria.",
+            assessor=FakeFinalAssessor(
+                provider=AnalysisProvider.OPENAI,
+                category="OpenAI category",
+                topic="OpenAI topic",
+                summary="OpenAI summary",
+            ),
+        )
+
+        session.commit()
+        
+        assess_and_store_final_full_text(
+            session,
+            document_id=document.id,
+            criteria="Test criteria.",
+            assessor=FakeFinalAssessor(
+                provider=AnalysisProvider.ANTHROPIC,
+                category="Claude category",
+                topic="Claude topic",
+                summary="Claude summary",
+            ),
+            overwrite=True,
+        )
+
+        session.commit()
+        session.refresh(document)
+        
+        analyses = list(
+            session.scalars(
+                select(DocumentAnalysis)
+                .where(
+                    DocumentAnalysis.document_id
+                    == document.id
+                )
+                .order_by(DocumentAnalysis.id)
+            )
+        )
+
+        assert len(analyses) == 2
+
+        assert analyses[0].provider == "openai"
+        assert analyses[0].summary == "OpenAI summary"
+
+        assert analyses[1].provider == "anthropic"
+        assert analyses[1].summary == "Claude summary"
+        
+        assert document.summary == "OpenAI summary"
+        assert document.primary_category == (
+            "OpenAI category"
+        )
+        assert document.topic == "OpenAI topic"

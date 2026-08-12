@@ -72,3 +72,9 @@ class DocumentMetadata(BaseModel):
     classification_status: ClassificationStatus = (
         ClassificationStatus.NOT_CLASSIFIED
     )
+    
+class AnalysisProvider(StrEnum):
+    """Provider that produced an analytical result."""
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"

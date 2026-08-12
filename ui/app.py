@@ -5,13 +5,12 @@ import signal
 import subprocess
 import sys
 import time
+from html import escape
 from pathlib import Path
 
 import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-
-from html import escape
 
 from historical_text_pipeline.batch import (
     DupoBatchStage,

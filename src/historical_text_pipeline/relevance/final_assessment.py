@@ -9,6 +9,9 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from historical_text_pipeline.config.settings import Settings
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+)
 
 
 class FinalRelevanceDecision(StrEnum):
@@ -90,20 +93,25 @@ class FinalAssessmentOutput(BaseModel):
         ),
     )
 
-
 @dataclass(frozen=True, slots=True)
 class FinalAssessmentRun:
-    """A final assessment and its API metadata."""
+    """One provider's final full-text model call."""
 
     output: FinalAssessmentOutput
-    response_id: str
+    provider: AnalysisProvider
     model: str
+    prompt_version: str
+    response_id: str | None
     input_tokens: int | None
     output_tokens: int | None
 
 
 class FinalAssessor(Protocol):
     """Interface for complete-document assessment."""
+
+    @property
+    def provider(self) -> AnalysisProvider:
+        """Return the analysis provider."""
 
     def assess(
         self,
@@ -116,6 +124,7 @@ class FinalAssessor(Protocol):
 
     def close(self) -> None:
         """Release network resources."""
+
 
 
 FINAL_ASSESSMENT_INSTRUCTIONS = """
@@ -147,6 +156,8 @@ Rules:
 - Keep supporting evidence short and traceable to the transcription.
 """.strip()
 
+FINAL_PROMPT_VERSION = "v1"
+
 
 class OpenAiFinalAssessmentError(Exception):
     """Raised when the final assessment cannot be completed."""
@@ -154,6 +165,10 @@ class OpenAiFinalAssessmentError(Exception):
 
 class OpenAiFinalAssessor:
     """Assess complete document text using OpenAI."""
+    
+    @property
+    def provider(self) -> AnalysisProvider:
+        return AnalysisProvider.OPENAI
 
     def __init__(
         self,
@@ -167,7 +182,8 @@ class OpenAiFinalAssessor:
         self._model = model
         self._max_output_tokens = max_output_tokens
         self._reasoning_effort = reasoning_effort
-
+        
+    
     @classmethod
     def from_settings(
         cls,
@@ -327,8 +343,10 @@ COMPLETE OCR TRANSCRIPTION
 
         return FinalAssessmentRun(
             output=output,
-            response_id=response.id,
+            provider=AnalysisProvider.OPENAI,
             model=str(response.model),
+            prompt_version=FINAL_PROMPT_VERSION,
+            response_id=response.id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )

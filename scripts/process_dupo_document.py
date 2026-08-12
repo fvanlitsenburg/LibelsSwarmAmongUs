@@ -10,7 +10,6 @@ from historical_text_pipeline.db.session import (
 )
 from historical_text_pipeline.domain import RelevanceStatus
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 RELEVANCE_SCRIPT = (
