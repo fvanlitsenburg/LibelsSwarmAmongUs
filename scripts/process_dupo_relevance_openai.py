@@ -6,7 +6,10 @@ from pathlib import Path
 from historical_text_pipeline.config.settings import get_settings
 from historical_text_pipeline.db.models import Document
 from historical_text_pipeline.db.session import get_session_factory
-from historical_text_pipeline.domain import RelevanceStatus
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+    RelevanceStatus,
+)
 from historical_text_pipeline.ingest.dupo_knuttel import (
     extract_and_save_knuttel_number,
 )
@@ -23,6 +26,7 @@ from historical_text_pipeline.relevance.service import (
     assess_and_store_relevance,
     get_latest_assessment,
     get_next_batch_end_page,
+    get_provider_state,
 )
 
 
@@ -70,6 +74,7 @@ def main() -> None:
     criteria = load_criteria(
         settings.relevance_criteria_path
     )
+    provider = AnalysisProvider.OPENAI
 
     session_factory = get_session_factory()
 
@@ -81,19 +86,30 @@ def main() -> None:
                 f"Document {document_id} does not exist."
             )
 
-        if document.relevance_status in {
-            RelevanceStatus.RELEVANT,
-            RelevanceStatus.IRRELEVANT,
-        }:
+        provider_state = get_provider_state(
+            session,
+            document_id=document.id,
+            provider=provider,
+        )
+
+        if (
+            provider_state is not None
+            and provider_state.relevance_status
+            in {
+                RelevanceStatus.RELEVANT.value,
+                RelevanceStatus.IRRELEVANT.value,
+            }
+        ):
             raise SystemExit(
-                f"Document {document_id} already has final "
-                f"relevance status "
-                f"{document.relevance_status.value}."
+                f"Document {document.id} already has resolved "
+                f"OpenAI relevance status "
+                f"{provider_state.relevance_status!r}."
             )
 
         latest = get_latest_assessment(
             session,
             document_id=document_id,
+            provider=provider,
         )
 
         previous_end_page = (
@@ -106,7 +122,7 @@ def main() -> None:
             session,
             document_id=document_id,
             batch_size=settings.relevance_batch_size,
-            provider=assessor.provider,
+            provider=provider,
         )
 
     if end_page is None:
@@ -204,6 +220,9 @@ def main() -> None:
                 assessor=assessor,
                 stop_confidence_threshold=(
                     settings.relevance_stop_confidence_threshold
+                ),
+                max_assessments=(
+                    settings.relevance_max_assessments
                 ),
             )
 

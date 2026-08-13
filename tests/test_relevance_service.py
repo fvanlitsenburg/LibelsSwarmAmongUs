@@ -213,7 +213,7 @@ def test_continue_marks_document_relevant(
             pdf_path,
         )
 
-        result = assess_and_store_relevance(
+        assess_and_store_relevance(
             session,
             document_id=document.id,
             through_page=3,
@@ -222,14 +222,18 @@ def test_continue_marks_document_relevant(
         )
 
         session.commit()
-        session.refresh(document)
-
-        assert result.decision == RelevanceDecision.CONTINUE
-        assert document.relevance_status == (
-            RelevanceStatus.RELEVANT
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.OPENAI.value,
+            )
         )
-        assert document.primary_category == "test-category"
-        assert document.topic == "test topic"
+
+        assert state is not None
+        assert state.relevance_status == RelevanceStatus.RELEVANT.value
+        assert state.primary_category == "test-category"
+        assert state.topic == "test topic"
 
 
 def test_first_stop_requires_another_batch(
@@ -251,7 +255,7 @@ def test_first_stop_requires_another_batch(
             pdf_path,
         )
 
-        result = assess_and_store_relevance(
+        assess_and_store_relevance(
             session,
             document_id=document.id,
             through_page=3,
@@ -260,15 +264,18 @@ def test_first_stop_requires_another_batch(
         )
 
         session.commit()
-        session.refresh(document)
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.OPENAI.value,
+            )
+        )
 
-        assert result.stop_confirmed is False
-        assert document.relevance_status == (
-            RelevanceStatus.UNCERTAIN
-        )
-        assert document.processing_status == (
-            "relevance_stop_pending"
-        )
+        assert state is not None
+        assert state.relevance_status == RelevanceStatus.UNCERTAIN.value
+        assert state.primary_category == "test-category"
+        assert state.topic == "test topic"
 
 
 def test_second_confident_stop_confirms_irrelevance(
@@ -291,7 +298,7 @@ def test_second_confident_stop_confirms_irrelevance(
             pdf_path,
         )
 
-        first_result = assess_and_store_relevance(
+        assess_and_store_relevance(
             session,
             document_id=document.id,
             through_page=3,
@@ -308,7 +315,7 @@ def test_second_confident_stop_confirms_irrelevance(
             end_page=6,
         )
 
-        second_result = assess_and_store_relevance(
+        assess_and_store_relevance(
             session,
             document_id=document.id,
             through_page=6,
@@ -317,16 +324,18 @@ def test_second_confident_stop_confirms_irrelevance(
         )
 
         session.commit()
-        session.refresh(document)
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.OPENAI.value,
+            )
+        )
 
-        assert first_result.stop_confirmed is False
-        assert second_result.stop_confirmed is True
-        assert document.relevance_status == (
-            RelevanceStatus.IRRELEVANT
-        )
-        assert document.processing_status == (
-            "relevance_stopped"
-        )
+        assert state is not None
+        assert state.relevance_status == RelevanceStatus.IRRELEVANT.value
+        assert state.primary_category == "test-category"
+        assert state.topic == "test topic"
         
 def test_relevance_sequence_is_independent_per_provider(
     db_engine: Engine,
@@ -408,89 +417,6 @@ def test_relevance_sequence_is_independent_per_provider(
             ("openai", 1),
             ("anthropic", 1),
         }
-        
-def test_anthropic_relevance_does_not_change_canonical_document_state(
-    db_engine: Engine,
-    tmp_path: Path,
-) -> None:
-    pdf_path = tmp_path / "document.pdf"
-    pdf_path.write_bytes(b"fake PDF")
-
-    with Session(db_engine) as session:
-        document = add_document_with_pages(
-            session,
-            pdf_path,
-        )
-
-        openai_assessor = FakeAssessor(
-            [
-                make_output(
-                    RelevanceDecision.CONTINUE
-                )
-            ],
-            provider=AnalysisProvider.OPENAI,
-        )
-
-        openai_result = assess_and_store_relevance(
-            session,
-            document_id=document.id,
-            through_page=3,
-            criteria="Test criteria.",
-            assessor=openai_assessor,
-        )
-
-        session.commit()
-        session.refresh(document)
-
-        assert openai_result.relevance_status == (
-            RelevanceStatus.RELEVANT
-        )
-
-        assert document.relevance_status == (
-            RelevanceStatus.RELEVANT
-        )
-
-        assert document.primary_category == (
-            "test-category"
-        )
-
-        original_reason = document.relevance_reason
-        original_topic = document.topic
-        original_category = document.primary_category
-
-        anthropic_assessor = FakeAssessor(
-            [
-                make_output(
-                    RelevanceDecision.STOP
-                )
-            ],
-            provider=AnalysisProvider.ANTHROPIC,
-        )
-
-        anthropic_result = assess_and_store_relevance(
-            session,
-            document_id=document.id,
-            through_page=3,
-            criteria="Test criteria.",
-            assessor=anthropic_assessor,
-        )
-
-        session.commit()
-        session.refresh(document)
-
-        # Claude's own first STOP is not yet confirmed.
-        assert anthropic_result.relevance_status == (
-            RelevanceStatus.UNCERTAIN
-        )
-
-        # But the canonical document state remains OpenAI's.
-        assert document.relevance_status == (
-            RelevanceStatus.RELEVANT
-        )
-
-        assert document.primary_category == original_category
-        assert document.topic == original_topic
-        assert document.relevance_reason == original_reason
         
 def test_next_batch_is_independent_per_provider(
     db_engine: Engine,

@@ -36,13 +36,46 @@ def get_dupo_batch_document_ids(
     session: Session,
     *,
     stage: DupoBatchStage,
+    provider: AnalysisProvider,
     limit: int,
     start_id: int | None = None,
 ) -> list[int]:
-    """Return eligible document IDs for one batch stage."""
+    """Return provider-specific eligible DUPO document IDs."""
 
     if limit < 1:
         raise ValueError("Batch limit must be at least one.")
+
+    provider_state_exists = exists(
+        select(DocumentProviderState.id).where(
+            DocumentProviderState.document_id == Document.id,
+            DocumentProviderState.provider == provider.value,
+        )
+    )
+
+    provider_uncertain_exists = exists(
+        select(DocumentProviderState.id).where(
+            DocumentProviderState.document_id == Document.id,
+            DocumentProviderState.provider == provider.value,
+            DocumentProviderState.relevance_status
+            == RelevanceStatus.UNCERTAIN.value,
+        )
+    )
+
+    provider_relevant_exists = exists(
+        select(DocumentProviderState.id).where(
+            DocumentProviderState.document_id == Document.id,
+            DocumentProviderState.provider == provider.value,
+            DocumentProviderState.relevance_status
+            == RelevanceStatus.RELEVANT.value,
+        )
+    )
+
+    final_analysis_exists = exists(
+        select(DocumentAnalysis.id).where(
+            DocumentAnalysis.document_id == Document.id,
+            DocumentAnalysis.provider == provider.value,
+        )
+    )
 
     conditions = [
         Document.source == Source.DUPO,
@@ -57,76 +90,63 @@ def get_dupo_batch_document_ids(
     ]
 
     if start_id is not None:
-        conditions.append(Document.id >= start_id)
+        conditions.append(
+            Document.id >= start_id
+        )
 
     if stage == DupoBatchStage.RELEVANCE:
-        conditions.extend(
-            [
-                Document.text_complete.is_(False),
-                Document.relevance_status.in_(
-                    (
-                        RelevanceStatus.NOT_ASSESSED,
-                        RelevanceStatus.UNCERTAIN,
-                    )
-                ),
-            ]
+        # This provider has not resolved progressive relevance yet.
+        #
+        # Do not require incomplete OCR here. A document may already
+        # have full shared OCR because another provider caused it to
+        # be completed, while this provider still needs its own
+        # progressive relevance experiment.
+        conditions.append(
+            or_(
+                ~provider_state_exists,
+                provider_uncertain_exists,
+            )
         )
 
     elif stage == DupoBatchStage.OCR:
+        # OCR is shared, but completion is triggered by this
+        # provider having judged the document relevant.
         conditions.extend(
             [
                 Document.text_complete.is_(False),
-                Document.relevance_status
-                == RelevanceStatus.RELEVANT,
+                provider_relevant_exists,
             ]
         )
 
     elif stage == DupoBatchStage.FINAL:
+        # Once full OCR exists, this provider may receive a final
+        # assessment regardless of its earlier progressive verdict.
         conditions.extend(
             [
                 Document.text_complete.is_(True),
-                or_(
-                    Document.summary.is_(None),
-                    Document.summary == "",
-                ),
-                Document.relevance_status.in_(
-                    (
-                        RelevanceStatus.NOT_ASSESSED,
-                        RelevanceStatus.UNCERTAIN,
-                        RelevanceStatus.RELEVANT,
-                    )
-                ),
+                ~final_analysis_exists,
             ]
         )
 
     elif stage == DupoBatchStage.PIPELINE:
         conditions.append(
             or_(
-                # Not yet resolved for relevance.
-                Document.relevance_status.in_(
-                    (
-                        RelevanceStatus.NOT_ASSESSED,
-                        RelevanceStatus.UNCERTAIN,
-                    )
+                # Progressive relevance not resolved for provider.
+                ~provider_state_exists,
+                provider_uncertain_exists,
+
+                # Provider found relevance, but shared OCR is
+                # incomplete.
+                (
+                    provider_relevant_exists
+                    & Document.text_complete.is_(False)
                 ),
 
-                # Relevant, but OCR still incomplete.
+                # Shared OCR is complete, but this provider still
+                # lacks a final full-text analysis.
                 (
-                    (Document.relevance_status == RelevanceStatus.RELEVANT)
-                    & (Document.text_complete.is_(False))
-                ),
-
-                # Complete text but no final assessment yet.
-                (
-                    (Document.text_complete.is_(True))
-                    & or_(
-                        Document.summary.is_(None),
-                        Document.summary == "",
-                    )
-                    & (
-                        Document.relevance_status
-                        != RelevanceStatus.IRRELEVANT
-                    )
+                    Document.text_complete.is_(True)
+                    & ~final_analysis_exists
                 ),
             )
         )

@@ -141,7 +141,7 @@ def main() -> None:
 
     try:
         with session_factory() as session:
-            result = assess_and_store_final_full_text(
+            assess_and_store_final_full_text(
                 session,
                 document_id=arguments.document_id,
                 criteria=criteria,

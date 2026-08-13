@@ -51,7 +51,6 @@ class StoredFinalAssessmentResult:
     input_tokens: int | None
     output_tokens: int | None
     provider: AnalysisProvider
-    model: str
     prompt_version: str
 
 
@@ -195,36 +194,6 @@ def store_final_assessment_run(
         assessment_number=assessment_number,
         units_processed=document.total_units or 0,
     )
-
-    if run.provider == AnalysisProvider.OPENAI:
-        document.relevance_status = relevance_status
-        document.relevance_score = output.relevance_score
-        document.relevance_confidence = output.confidence
-        document.relevance_reason = (
-            output.relevance_explanation
-        )
-        document.primary_category = output.category
-        document.topic = output.topic
-        document.summary = output.summary
-        document.classification_status = (
-            ClassificationStatus.FULL_TEXT
-        )
-        document.error_message = None
-
-        if relevance_status == RelevanceStatus.RELEVANT:
-            document.processing_status = (
-                "analysis_complete"
-            )
-
-        elif relevance_status == RelevanceStatus.IRRELEVANT:
-            document.processing_status = (
-                "final_irrelevant"
-            )
-
-        else:
-            document.processing_status = (
-                "needs_manual_review"
-            )
 
     if relevance_status == RelevanceStatus.RELEVANT:
         document.processing_status = "analysis_complete"

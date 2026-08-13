@@ -11,9 +11,12 @@ from historical_text_pipeline.batch import (
 )
 from historical_text_pipeline.db.models import (
     Document,
+    DocumentAnalysis,
+    DocumentProviderState,
     DupoMetadata,
 )
 from historical_text_pipeline.domain import (
+    AnalysisProvider,
     RelevanceStatus,
     Source,
 )
@@ -24,12 +27,13 @@ def add_document(
     tmp_path: Path,
     *,
     name: str,
-    relevance_status: RelevanceStatus,
+    relevance_status: RelevanceStatus | None,
     text_complete: bool,
-    summary: str | None = None,
+    provider: AnalysisProvider = AnalysisProvider.OPENAI,
+    has_final_analysis: bool = False,
     processing_status: str = "inspected",
 ) -> Document:
-    """Create one document in a particular pipeline state."""
+    """Create one document in a provider-specific pipeline state."""
 
     pdf_path = tmp_path / f"{name}.pdf"
     pdf_path.write_bytes(name.encode())
@@ -48,13 +52,56 @@ def add_document(
         ),
         text_complete=text_complete,
         text_method="ocr",
-        relevance_status=relevance_status,
         processing_status=processing_status,
-        summary=summary,
         dupo=DupoMetadata(),
     )
 
     session.add(document)
+    session.flush()
+
+    # No provider-state row means this provider has never
+    # assessed the document.
+    if relevance_status is not None:
+        session.add(
+            DocumentProviderState(
+                document_id=document.id,
+                provider=provider.value,
+                relevance_status=relevance_status.value,
+                relevance_score=0.8,
+                confidence=0.9,
+                primary_category="test-category",
+                topic="test topic",
+                relevance_reason="Test relevance reason.",
+                last_assessment_number=1,
+                units_processed=3,
+            )
+        )
+
+    if has_final_analysis:
+        session.add(
+            DocumentAnalysis(
+                document_id=document.id,
+                provider=provider.value,
+                model="test-model",
+                prompt_version="test-v1",
+                decision=(
+                    relevance_status.value
+                    if relevance_status is not None
+                    else RelevanceStatus.RELEVANT.value
+                ),
+                relevance_score=0.8,
+                confidence=0.9,
+                primary_category="test-category",
+                topic="test topic",
+                relevance_explanation=(
+                    "Test final relevance explanation."
+                ),
+                summary="Already analyzed.",
+                supporting_evidence=[],
+                caveats=[],
+            )
+        )
+
     session.flush()
 
     return document
@@ -69,9 +116,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="pending",
-            relevance_status=(
-                RelevanceStatus.NOT_ASSESSED
-            ),
+            relevance_status=None,
             text_complete=False,
         )
 
@@ -79,9 +124,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="uncertain",
-            relevance_status=(
-                RelevanceStatus.UNCERTAIN
-            ),
+            relevance_status=RelevanceStatus.UNCERTAIN,
             text_complete=False,
         )
 
@@ -89,9 +132,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="relevant-partial",
-            relevance_status=(
-                RelevanceStatus.RELEVANT
-            ),
+            relevance_status=RelevanceStatus.RELEVANT,
             text_complete=False,
         )
 
@@ -99,9 +140,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="relevant-complete",
-            relevance_status=(
-                RelevanceStatus.RELEVANT
-            ),
+            relevance_status=RelevanceStatus.RELEVANT,
             text_complete=True,
         )
 
@@ -109,9 +148,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="uncertain-complete",
-            relevance_status=(
-                RelevanceStatus.UNCERTAIN
-            ),
+            relevance_status=RelevanceStatus.UNCERTAIN,
             text_complete=True,
         )
 
@@ -119,9 +156,7 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="irrelevant",
-            relevance_status=(
-                RelevanceStatus.IRRELEVANT
-            ),
+            relevance_status=RelevanceStatus.IRRELEVANT,
             text_complete=False,
         )
 
@@ -129,20 +164,16 @@ def test_selects_documents_for_correct_batch_stage(
             session,
             tmp_path,
             name="already-final",
-            relevance_status=(
-                RelevanceStatus.RELEVANT
-            ),
+            relevance_status=RelevanceStatus.RELEVANT,
             text_complete=True,
-            summary="Already analyzed.",
+            has_final_analysis=True,
         )
 
         add_document(
             session,
             tmp_path,
             name="pdf-error",
-            relevance_status=(
-                RelevanceStatus.NOT_ASSESSED
-            ),
+            relevance_status=None,
             text_complete=False,
             processing_status="pdf_error",
         )
@@ -152,24 +183,28 @@ def test_selects_documents_for_correct_batch_stage(
         relevance_ids = get_dupo_batch_document_ids(
             session,
             stage=DupoBatchStage.RELEVANCE,
+            provider=AnalysisProvider.OPENAI,
             limit=100,
         )
 
         ocr_ids = get_dupo_batch_document_ids(
             session,
             stage=DupoBatchStage.OCR,
+            provider=AnalysisProvider.OPENAI,
             limit=100,
         )
 
         final_ids = get_dupo_batch_document_ids(
             session,
             stage=DupoBatchStage.FINAL,
+            provider=AnalysisProvider.OPENAI,
             limit=100,
         )
 
         assert relevance_ids == [
             pending.id,
             uncertain.id,
+            uncertain_complete.id,
         ]
 
         assert ocr_ids == [
@@ -191,9 +226,7 @@ def test_batch_limit_is_applied(
             session,
             tmp_path,
             name="first",
-            relevance_status=(
-                RelevanceStatus.NOT_ASSESSED
-            ),
+            relevance_status=None,
             text_complete=False,
         )
 
@@ -201,9 +234,7 @@ def test_batch_limit_is_applied(
             session,
             tmp_path,
             name="second",
-            relevance_status=(
-                RelevanceStatus.NOT_ASSESSED
-            ),
+            relevance_status=None,
             text_complete=False,
         )
 
@@ -212,7 +243,77 @@ def test_batch_limit_is_applied(
         result = get_dupo_batch_document_ids(
             session,
             stage=DupoBatchStage.RELEVANCE,
+            provider=AnalysisProvider.OPENAI,
             limit=1,
         )
 
         assert result == [first.id]
+
+
+def test_relevance_selection_is_provider_specific(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    with Session(db_engine) as session:
+        document = add_document(
+            session,
+            tmp_path,
+            name="provider-specific",
+            relevance_status=RelevanceStatus.RELEVANT,
+            text_complete=False,
+            provider=AnalysisProvider.OPENAI,
+        )
+
+        session.commit()
+
+        openai_ids = get_dupo_batch_document_ids(
+            session,
+            stage=DupoBatchStage.RELEVANCE,
+            provider=AnalysisProvider.OPENAI,
+            limit=100,
+        )
+
+        anthropic_ids = get_dupo_batch_document_ids(
+            session,
+            stage=DupoBatchStage.RELEVANCE,
+            provider=AnalysisProvider.ANTHROPIC,
+            limit=100,
+        )
+
+        assert document.id not in openai_ids
+        assert document.id in anthropic_ids
+
+
+def test_final_selection_is_provider_specific(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    with Session(db_engine) as session:
+        document = add_document(
+            session,
+            tmp_path,
+            name="final-provider-specific",
+            relevance_status=RelevanceStatus.RELEVANT,
+            text_complete=True,
+            provider=AnalysisProvider.OPENAI,
+            has_final_analysis=True,
+        )
+
+        session.commit()
+
+        openai_ids = get_dupo_batch_document_ids(
+            session,
+            stage=DupoBatchStage.FINAL,
+            provider=AnalysisProvider.OPENAI,
+            limit=100,
+        )
+
+        anthropic_ids = get_dupo_batch_document_ids(
+            session,
+            stage=DupoBatchStage.FINAL,
+            provider=AnalysisProvider.ANTHROPIC,
+            limit=100,
+        )
+
+        assert document.id not in openai_ids
+        assert document.id in anthropic_ids

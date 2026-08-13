@@ -358,35 +358,6 @@ def assess_and_store_relevance(
         units_processed=through_page,
     )
 
-    # Only OpenAI currently controls the canonical Document fields.
-    if run.provider == AnalysisProvider.OPENAI:
-        document.relevance_status = provider_status
-        document.relevance_score = output.relevance_score
-        document.relevance_confidence = output.confidence
-        document.relevance_reason = output.reason
-        document.primary_category = output.category
-        document.topic = output.topic
-
-        if provider_status == RelevanceStatus.RELEVANT:
-            document.processing_status = (
-                "relevance_confirmed"
-            )
-
-        elif provider_status == RelevanceStatus.IRRELEVANT:
-            document.processing_status = (
-                "relevance_stopped"
-            )
-
-        elif output.decision == RelevanceDecision.STOP:
-            document.processing_status = (
-                "relevance_stop_pending"
-            )
-
-        else:
-            document.processing_status = (
-                "relevance_uncertain"
-            )
-
     session.flush()
 
     return StoredRelevanceResult(

@@ -1,4 +1,4 @@
-"""Complete OCR for a relevant DUPO document."""
+"""Complete OCR for a relevant DUPO document with OpenAI."""
 
 import argparse
 
@@ -9,13 +9,16 @@ from historical_text_pipeline.db.models import Document
 from historical_text_pipeline.db.session import (
     get_session_factory,
 )
-from historical_text_pipeline.domain import RelevanceStatus
+from historical_text_pipeline.domain import AnalysisProvider, RelevanceStatus
 from historical_text_pipeline.ingest.dupo_ocr import (
     get_missing_dupo_pages,
     ocr_dupo_page,
 )
 from historical_text_pipeline.ocr.factory import (
     create_ocr_backend,
+)
+from historical_text_pipeline.relevance.service import (
+    get_provider_state,
 )
 
 
@@ -33,6 +36,15 @@ def parse_arguments() -> argparse.Namespace:
         "document_id",
         type=int,
         help="Internal PostgreSQL document ID.",
+    )
+    
+    parser.add_argument(
+        "--provider",
+        choices=[
+            provider.value
+            for provider in AnalysisProvider
+        ],
+        required=True,
     )
 
     return parser.parse_args()
@@ -66,6 +78,8 @@ def main() -> None:
     settings = get_settings()
     session_factory = get_session_factory()
 
+    provider = AnalysisProvider(arguments.provider)
+
     with session_factory() as session:
         document = session.get(
             Document,
@@ -78,16 +92,25 @@ def main() -> None:
                 "does not exist."
             )
 
-        if document.relevance_status != RelevanceStatus.RELEVANT:
-            raise SystemExit(
-                f"Document {document.id} is not marked relevant. "
-                f"Current status: "
-                f"{document.relevance_status.value}"
-            )
-
         if document.total_units is None:
             raise SystemExit(
                 f"Document {document.id} has not been inspected."
+            )
+            
+        provider_state = get_provider_state(
+            session,
+            document_id=document.id,
+            provider=provider,
+        )
+
+        if (
+            provider_state is None
+            or provider_state.relevance_status
+            != RelevanceStatus.RELEVANT.value
+        ):
+            raise SystemExit(
+                f"Document {document.id} is not relevant "
+                f"for provider {provider.value!r}."
             )
 
         missing_pages = get_missing_dupo_pages(

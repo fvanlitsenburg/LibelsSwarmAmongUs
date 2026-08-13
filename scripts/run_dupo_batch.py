@@ -12,30 +12,61 @@ from historical_text_pipeline.batch import (
 from historical_text_pipeline.db.session import (
     get_session_factory,
 )
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
-STAGE_SCRIPTS = {
-    DupoBatchStage.RELEVANCE: (
-        REPOSITORY_ROOT
-        / "scripts"
-        / "process_dupo_relevance_batch.py"
-    ),
-    DupoBatchStage.OCR: (
-        REPOSITORY_ROOT
-        / "scripts"
-        / "complete_dupo_ocr.py"
-    ),
-    DupoBatchStage.FINAL: (
-        REPOSITORY_ROOT
-        / "scripts"
-        / "finalize_dupo_document.py"
-    ),
-    DupoBatchStage.PIPELINE: (
-        REPOSITORY_ROOT
-        / "scripts"
-        / "process_dupo_document.py"
-    ),
+
+STAGE_SCRIPTS: dict[
+    AnalysisProvider,
+    dict[DupoBatchStage, Path],
+] = {
+    AnalysisProvider.OPENAI: {
+        DupoBatchStage.RELEVANCE: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "process_dupo_relevance_batch.py"
+        ),
+        DupoBatchStage.OCR: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "complete_dupo_ocr.py"
+        ),
+        DupoBatchStage.FINAL: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "finalize_dupo_document.py"
+        ),
+        DupoBatchStage.PIPELINE: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "process_dupo_document.py"
+        ),
+    },
+    AnalysisProvider.ANTHROPIC: {
+        DupoBatchStage.RELEVANCE: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "process_dupo_relevance_anthropic.py"
+        ),
+        DupoBatchStage.OCR: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "complete_dupo_ocr.py"
+        ),
+        DupoBatchStage.FINAL: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "finalize_dupo_document_anthropic.py"
+        ),
+        DupoBatchStage.PIPELINE: (
+            REPOSITORY_ROOT
+            / "scripts"
+            / "process_dupo_document.py"
+        ),
+    },
 }
 
 
@@ -56,8 +87,18 @@ def parse_arguments() -> argparse.Namespace:
             for stage in DupoBatchStage
         ],
         help=(
-            "Stage to run: relevance, ocr, or final."
+            "Stage to run: relevance, ocr, final, or pipeline."
         ),
+    )
+    
+    parser.add_argument(
+        "--provider",
+        choices=[
+            provider.value
+            for provider in AnalysisProvider
+        ],
+        required=True,
+        help="Analysis provider to process.",
     )
 
     parser.add_argument(
@@ -95,17 +136,29 @@ def parse_arguments() -> argparse.Namespace:
 def run_document(
     *,
     stage: DupoBatchStage,
+    provider: AnalysisProvider,
     document_id: int,
 ) -> int:
-    """Run the existing one-document script."""
+    """Run the provider-specific one-document script."""
 
-    script_path = STAGE_SCRIPTS[stage]
+    script_path = STAGE_SCRIPTS[provider][stage]
 
     command = [
         sys.executable,
         str(script_path),
         str(document_id),
     ]
+
+    if stage in {
+        DupoBatchStage.OCR,
+        DupoBatchStage.PIPELINE,
+    }:
+        command.extend(
+            [
+                "--provider",
+                provider.value,
+            ]
+        )
 
     completed = subprocess.run(
         command,
@@ -125,17 +178,20 @@ def main() -> None:
         raise SystemExit("--limit must be at least 1.")
 
     stage = DupoBatchStage(arguments.stage)
+    provider = AnalysisProvider(arguments.provider)
     session_factory = get_session_factory()
 
     with session_factory() as session:
         document_ids = get_dupo_batch_document_ids(
             session,
             stage=stage,
+            provider=provider,
             limit=arguments.limit,
             start_id=arguments.start_id,
         )
 
     print(f"Stage:              {stage.value}")
+    print(f"Provider:           {provider.value}")
     print(f"Documents selected: {len(document_ids)}")
 
     if arguments.start_id is not None:
@@ -178,6 +234,7 @@ def main() -> None:
         try:
             return_code = run_document(
                 stage=stage,
+                provider=provider,
                 document_id=document_id,
             )
         except KeyboardInterrupt:

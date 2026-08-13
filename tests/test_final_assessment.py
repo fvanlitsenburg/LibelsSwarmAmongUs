@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from historical_text_pipeline.db.models import (
     Document,
     DocumentAnalysis,
+    DocumentProviderState,
     DocumentTextUnit,
     DupoMetadata,
     RelevanceAssessment,
@@ -165,7 +166,7 @@ def add_complete_document(
     return document
 
 
-def test_final_assessment_updates_document(
+def test_final_assessment_updates_provider_state(
     db_engine: Engine,
     tmp_path: Path,
 ) -> None:
@@ -196,12 +197,20 @@ def test_final_assessment_updates_document(
         assert document.relevance_status == (
             RelevanceStatus.RELEVANT
         )
-        assert document.relevance_score == pytest.approx(0.94)
-        assert document.relevance_confidence == pytest.approx(0.91)
-        assert document.primary_category == "political polemic"
-        assert document.topic == "Conflict over public authority"
-        assert document.summary is not None
-        assert document.processing_status == "analysis_complete"
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.OPENAI.value,
+            )
+        )
+
+        assert state is not None
+        assert state.relevance_status == RelevanceStatus.RELEVANT.value
+        assert state.relevance_score == pytest.approx(0.94)
+        assert state.confidence == pytest.approx(0.91)
+        assert state.primary_category == "political polemic"
+        assert state.topic == "Conflict over public authority"
 
         final_assessment = session.scalar(
             select(RelevanceAssessment)
@@ -280,20 +289,28 @@ def test_openai_final_assessment_is_stored(
 
         session.commit()
         
-        session.refresh(document)
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id
+                == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.OPENAI.value,
+            )
+        )
 
-        assert document.primary_category == (
+        assert state is not None
+
+        assert state.relevance_status == (
+            RelevanceStatus.RELEVANT.value
+        )
+        assert state.relevance_score == pytest.approx(0.94)
+        assert state.confidence == pytest.approx(0.91)
+
+        assert state.primary_category == (
             "political polemic"
         )
-
-        assert document.topic == (
+        assert state.topic == (
             "Conflict over public authority"
-        )
-
-        assert document.summary == "A test summary."
-
-        assert document.relevance_status == (
-            RelevanceStatus.RELEVANT
         )
 
         analysis = session.scalar(
@@ -307,9 +324,11 @@ def test_openai_final_assessment_is_stored(
 
         assert analysis is not None
 
-        assert analysis.model == "gpt-test"
-        assert analysis.prompt_version == "test-v1"
-        assert analysis.decision == "relevant"
+        assert analysis.summary == "A test summary."
+        assert analysis.relevance_explanation == (
+            "The complete document directly addresses "
+            "the research subject."
+        )
 
         assert analysis.relevance_score == pytest.approx(
             0.94
@@ -331,73 +350,99 @@ def test_openai_final_assessment_is_stored(
 
         assert result.provider == AnalysisProvider.OPENAI
         
-def test_anthropic_analysis_does_not_replace_canonical_openai_result(
-    db_engine: Engine,
-    tmp_path: Path,
-) -> None:
-    pdf_path = tmp_path / "document.pdf"
-    pdf_path.write_bytes(b"fake PDF")
+def test_final_analyses_are_independent_per_provider(
+        db_engine: Engine,
+        tmp_path: Path,
+    ) -> None:
+        pdf_path = tmp_path / "document.pdf"
+        pdf_path.write_bytes(b"fake PDF")
 
-    with Session(db_engine) as session:
-        document = add_complete_document(
-            session,
-            pdf_path,
-        )
-
-        assess_and_store_final_full_text(
-            session,
-            document_id=document.id,
-            criteria="Test criteria.",
-            assessor=FakeFinalAssessor(
-                provider=AnalysisProvider.OPENAI,
-                category="OpenAI category",
-                topic="OpenAI topic",
-                summary="OpenAI summary",
-            ),
-        )
-
-        session.commit()
-        
-        assess_and_store_final_full_text(
-            session,
-            document_id=document.id,
-            criteria="Test criteria.",
-            assessor=FakeFinalAssessor(
-                provider=AnalysisProvider.ANTHROPIC,
-                category="Claude category",
-                topic="Claude topic",
-                summary="Claude summary",
-            ),
-            overwrite=True,
-        )
-
-        session.commit()
-        session.refresh(document)
-        
-        analyses = list(
-            session.scalars(
-                select(DocumentAnalysis)
-                .where(
-                    DocumentAnalysis.document_id
-                    == document.id
-                )
-                .order_by(DocumentAnalysis.id)
+        with Session(db_engine) as session:
+            document = add_complete_document(
+                session,
+                pdf_path,
             )
-        )
 
-        assert len(analyses) == 2
+            assess_and_store_final_full_text(
+                session,
+                document_id=document.id,
+                criteria="Test criteria.",
+                assessor=FakeFinalAssessor(
+                    provider=AnalysisProvider.OPENAI,
+                    category="OpenAI category",
+                    topic="OpenAI topic",
+                    summary="OpenAI summary",
+                ),
+            )
 
-        assert analyses[0].provider == "openai"
-        assert analyses[0].summary == "OpenAI summary"
+            session.commit()
 
-        assert analyses[1].provider == "anthropic"
-        assert analyses[1].summary == "Claude summary"
-        
-        assert document.summary == "OpenAI summary"
-        assert document.primary_category == (
-            "OpenAI category"
-        )
-        assert document.topic == "OpenAI topic"
+            assess_and_store_final_full_text(
+                session,
+                document_id=document.id,
+                criteria="Test criteria.",
+                assessor=FakeFinalAssessor(
+                    provider=AnalysisProvider.ANTHROPIC,
+                    category="Claude category",
+                    topic="Claude topic",
+                    summary="Claude summary",
+                ),
+            )
+
+            session.commit()
+
+            analyses = list(
+                session.scalars(
+                    select(DocumentAnalysis)
+                    .where(
+                        DocumentAnalysis.document_id
+                        == document.id
+                    )
+                    .order_by(DocumentAnalysis.provider)
+                )
+            )
+
+            assert len(analyses) == 2
+
+            analyses_by_provider = {
+                analysis.provider: analysis
+                for analysis in analyses
+            }
+
+            assert (
+                analyses_by_provider["openai"].summary
+                == "OpenAI summary"
+            )
+            assert (
+                analyses_by_provider["anthropic"].summary
+                == "Claude summary"
+            )
+
+            states = list(
+                session.scalars(
+                    select(DocumentProviderState)
+                    .where(
+                        DocumentProviderState.document_id
+                        == document.id
+                    )
+                )
+            )
+
+            assert len(states) == 2
+
+            states_by_provider = {
+                state.provider: state
+                for state in states
+            }
+
+            assert (
+                states_by_provider["openai"].primary_category
+                == "OpenAI category"
+            )
+            assert (
+                states_by_provider["anthropic"].primary_category
+                == "Claude category"
+            )
         
 def test_duplicate_provider_analysis_is_rejected(
     db_engine: Engine,
