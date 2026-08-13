@@ -164,11 +164,11 @@ http://localhost:8501
 
 The interface provides:
 
-[*] document filtering and ordering
-[*] browsing previously processed documents
-[*] complete OCR transcription
-[*] relevance-assessment history
-[*] summaries and document classifications
-[*] controls for launching processing batches
+* document filtering and ordering
+* browsing previously processed documents
+* complete OCR transcription
+* relevance-assessment history
+* summaries and document classifications
+* controls for launching processing batches
 
 The interface is currently intended for local use only.
