@@ -1,25 +1,22 @@
 # LibelsSwarmAmongUs
 
-A research pipeline for processing and analysing historical pamphlets from
-multiple digital collections.
+A research pipeline for processing and analysing historical pamphlets from two online collections: the Knuttel catalogue or 'Dutch Pamphlets Online' from Briel ('DUPO'), and the TCP Early English Texts.
+
+The pipeline is set up to:
+* transcribe the text of a pamphlet (relevant for DUPO only, as TCP is already transcribed)
+* assign the text to a relevant topic, or declare it irrelevant, with instructions in `relevance_criteria.txt`. While these are set up for my personal research topic (pamphlet wars between the Dutch Republic and England), editing these could make the pipeline relevant for other topics too
+* provide a summary of each text
 
 ## Sources
 
 ### Dutch Pamphlets Online (DUPO)
+https://www.kb.nl/bron/dutch-pamphlets-online
 
 Currently implemented.
 
-- PDFs remain in their existing year folders.
-- Year is derived from the containing folder.
-- PDFs are registered in PostgreSQL without moving or renaming the originals.
-- Scanned pages are OCR'd progressively.
-- OCR results are stored page by page and processing is resumable.
-- DUPO metadata can include:
-  - DUPO identifier
-  - title
-  - Knuttel catalogue number
-- Documents undergo progressive relevance assessment before full OCR.
-- Relevant documents receive complete OCR and a final full-text assessment.
+Because of terms and conditions, the analysis is performed on selected pamphlets downloaded to a personal computer. Their path must be specified in env at `LSAU_DUPO_ROOT`. The path must be subdivided into a folder per year.
+
+Folders are transcribed and then given a relevance assessment and summary.
 
 ### Text Creation Partnership (TCP)
 
