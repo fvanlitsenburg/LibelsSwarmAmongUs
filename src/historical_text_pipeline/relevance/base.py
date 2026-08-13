@@ -47,7 +47,7 @@ class RelevanceAssessmentOutput(BaseModel):
 
     reason: str = Field(
         min_length=1,
-        max_length=1000,
+        max_length=2000,
     )
 
     category: str = Field(

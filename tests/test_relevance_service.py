@@ -701,3 +701,54 @@ def test_provider_state_is_updated_not_duplicated(
         assert state.relevance_status == "relevant"
         assert state.last_assessment_number == 2
         assert state.units_processed == 6
+        
+def test_uncertain_at_end_of_short_document_resolves_irrelevant(
+    db_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "document.pdf"
+    pdf_path.write_bytes(b"fake PDF")
+
+    assessor = FakeAssessor(
+        [
+            make_output(
+                RelevanceDecision.UNCERTAIN
+            )
+        ],
+        provider=AnalysisProvider.ANTHROPIC,
+    )
+
+    with Session(db_engine) as session:
+        document = add_document_with_pages(
+            session,
+            pdf_path,
+            page_count=2,
+            stored_through=2,
+        )
+
+        result = assess_and_store_relevance(
+            session,
+            document_id=document.id,
+            through_page=2,
+            criteria="Test criteria.",
+            assessor=assessor,
+            max_assessments=4,
+        )
+
+        session.commit()
+
+        assert result.assessment_number == 1
+        assert result.relevance_status == RelevanceStatus.IRRELEVANT
+
+        state = session.scalar(
+            select(DocumentProviderState).where(
+                DocumentProviderState.document_id
+                == document.id,
+                DocumentProviderState.provider
+                == AnalysisProvider.ANTHROPIC.value,
+            )
+        )
+
+        assert state is not None
+        assert state.relevance_status == "irrelevant"
+        assert state.units_processed == 2

@@ -269,6 +269,7 @@ def assess_and_store_relevance(
 
     final_progressive_assessment = (
         assessment_number >= max_assessments
+        or through_page >= document.total_units
     )
 
     text = build_accumulated_page_text(
