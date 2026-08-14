@@ -22,7 +22,6 @@ from historical_text_pipeline.relevance.service import (
     get_provider_state,
 )
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 RELEVANCE_SCRIPTS = {

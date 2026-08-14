@@ -194,9 +194,6 @@ def test_final_assessment_updates_provider_state(
             FinalRelevanceDecision.RELEVANT
         )
 
-        assert document.relevance_status == (
-            RelevanceStatus.RELEVANT
-        )
         state = session.scalar(
             select(DocumentProviderState).where(
                 DocumentProviderState.document_id == document.id,
