@@ -9,26 +9,31 @@ from html import escape
 from pathlib import Path
 
 import streamlit as st
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import and_, select
+from sqlalchemy.orm import aliased, selectinload
+
+from historical_text_pipeline.db.models import (
+    Document,
+    DocumentAnalysis,
+    DocumentProviderState,
+    DocumentTextUnit,
+    RelevanceAssessment,
+)
+from historical_text_pipeline.domain import (
+    AnalysisProvider,
+    ClassificationStatus,
+    RelevanceStatus,
+    Source,
+)
 
 from historical_text_pipeline.batch import (
     DupoBatchStage,
     get_dupo_batch_document_ids,
 )
-from historical_text_pipeline.db.models import (
-    Document,
-    DocumentTextUnit,
-    RelevanceAssessment,
-)
 from historical_text_pipeline.db.session import (
     get_session_factory,
 )
-from historical_text_pipeline.domain import (
-    ClassificationStatus,
-    RelevanceStatus,
-    Source,
-)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RUN_DIRECTORY = REPOSITORY_ROOT / ".runs"
@@ -76,11 +81,10 @@ ORDER_LABELS = {
     "year": "Year",
     "title": "Title",
     "source": "Source",
-    "relevance": "Relevance",
+    "openai_relevance": "OpenAI relevance",
+    "anthropic_relevance": "Anthropic relevance",
     "classification": "Text status",
     "processing": "Processing status",
-    "category": "Category",
-    "topic": "Topic",
 }
 
 
@@ -107,9 +111,9 @@ def get_processing_status_options() -> list[str]:
 
 def search_documents(
     *,
-    evaluation_scope: str,
     source: str,
-    relevance_status: str,
+    openai_relevance_status: str,
+    anthropic_relevance_status: str,
     classification_status: str,
     processing_status: str,
     year_from: int | None,
@@ -122,33 +126,64 @@ def search_documents(
 
     session_factory = get_session_factory()
 
-    statement = select(Document).options(
-        selectinload(Document.dupo)
+    openai_state = aliased(
+        DocumentProviderState,
+        name="openai_state",
+    )
+
+    anthropic_state = aliased(
+        DocumentProviderState,
+        name="anthropic_state",
+    )
+
+    statement = (
+        select(Document)
+        .outerjoin(
+            openai_state,
+            and_(
+                openai_state.document_id == Document.id,
+                openai_state.provider
+                == AnalysisProvider.OPENAI.value,
+            ),
+        )
+        .outerjoin(
+            anthropic_state,
+            and_(
+                anthropic_state.document_id == Document.id,
+                anthropic_state.provider
+                == AnalysisProvider.ANTHROPIC.value,
+            ),
+        )
+        .options(
+            selectinload(Document.dupo)
+        )
     )
 
     conditions = []
-    
-    if evaluation_scope == "evaluated":
+
+    if openai_relevance_status == "not_assessed":
         conditions.append(
-            Document.relevance_status
-            != RelevanceStatus.NOT_ASSESSED
+            openai_state.id.is_(None)
+        )
+    elif openai_relevance_status != "any":
+        conditions.append(
+            openai_state.relevance_status
+            == openai_relevance_status
         )
 
-    elif evaluation_scope == "not_assessed":
+    if anthropic_relevance_status == "not_assessed":
         conditions.append(
-            Document.relevance_status
-            == RelevanceStatus.NOT_ASSESSED
+            anthropic_state.id.is_(None)
+        )
+    elif anthropic_relevance_status != "any":
+        conditions.append(
+            anthropic_state.relevance_status
+            == anthropic_relevance_status
         )
 
     if source != "any":
         conditions.append(
             Document.source == Source(source)
-        )
-
-    if relevance_status != "any":
-        conditions.append(
-            Document.relevance_status
-            == RelevanceStatus(relevance_status)
         )
 
     if classification_status != "any":
@@ -178,6 +213,22 @@ def search_documents(
     if conditions:
         statement = statement.where(*conditions)
 
+    order_columns = {
+        "id": Document.id,
+        "year": Document.year,
+        "title": Document.title,
+        "source": Document.source,
+        "openai_relevance": (
+            openai_state.relevance_status
+        ),
+        "anthropic_relevance": (
+            anthropic_state.relevance_status
+        ),
+        "classification": (
+            Document.classification_status
+        ),
+        "processing": Document.processing_status,
+    }
     order_columns = {
         "id": Document.id,
         "year": Document.year,
@@ -224,57 +275,155 @@ def document_table_rows(
 ) -> list[dict[str, object]]:
     """Prepare searchable document rows."""
 
-    return [
-        {
-            "ID": document.id,
-            "Year": document.year,
-            "Source": display_value(document.source),
-            "Title": (
-                document.title
-                or document.source_filename
-                or ""
-            ),
-            "Relevance": display_value(
-                document.relevance_status
-            ),
-            "Text": display_value(
-                document.classification_status
-            ),
-            "Processing": (
-                document.processing_status or ""
-            ),
-            "Category": (
-                document.primary_category or ""
-            ),
-            "Topic": document.topic or "",
-            "Pages": (
-                f"{document.units_processed or 0}/"
-                f"{document.total_units or '?'}"
-            ),
-        }
+    if not documents:
+        return []
+
+    session_factory = get_session_factory()
+
+    document_ids = [
+        document.id
         for document in documents
     ]
+
+    with session_factory() as session:
+        states = list(
+            session.scalars(
+                select(DocumentProviderState).where(
+                    DocumentProviderState.document_id.in_(
+                        document_ids
+                    )
+                )
+            )
+        )
+
+    states_by_document = {
+        (
+            state.document_id,
+            state.provider,
+        ): state
+        for state in states
+    }
+
+    rows: list[dict[str, object]] = []
+
+    for document in documents:
+        openai_state = states_by_document.get(
+            (
+                document.id,
+                AnalysisProvider.OPENAI.value,
+            )
+        )
+
+        anthropic_state = states_by_document.get(
+            (
+                document.id,
+                AnalysisProvider.ANTHROPIC.value,
+            )
+        )
+
+        rows.append(
+            {
+                "ID": document.id,
+                "Year": document.year,
+                "Source": display_value(
+                    document.source
+                ),
+                "Title": (
+                    document.title
+                    or document.source_filename
+                    or ""
+                ),
+                "OpenAI": (
+                    display_value(
+                        openai_state.relevance_status
+                    )
+                    if openai_state is not None
+                    else "not assessed"
+                ),
+                "Anthropic": (
+                    display_value(
+                        anthropic_state.relevance_status
+                    )
+                    if anthropic_state is not None
+                    else "not assessed"
+                ),
+                "Text": display_value(
+                    document.classification_status
+                ),
+                "Processing": (
+                    document.processing_status or ""
+                ),
+                "Pages": (
+                    f"{document.units_processed or 0}/"
+                    f"{document.total_units or '?'}"
+                ),
+            }
+        )
+
+    return rows
 
 def load_document_bundle(
     document_id: int,
 ) -> tuple[
     Document | None,
+    dict[str, DocumentProviderState],
+    dict[str, DocumentAnalysis],
     list[RelevanceAssessment],
     list[DocumentTextUnit],
 ]:
-    """Load one document, its assessments, and all stored pages."""
+    """Load one document and both providers' results."""
 
     session_factory = get_session_factory()
 
     with session_factory() as session:
         document = session.scalar(
             select(Document)
-            .options(selectinload(Document.dupo))
-            .where(Document.id == document_id)
+            .options(
+                selectinload(Document.dupo)
+            )
+            .where(
+                Document.id == document_id
+            )
         )
 
         if document is None:
-            return None, [], []
+            return None, {}, {}, [], []
+
+        states = list(
+            session.scalars(
+                select(DocumentProviderState).where(
+                    DocumentProviderState.document_id
+                    == document_id
+                )
+            )
+        )
+
+        provider_states = {
+            state.provider: state
+            for state in states
+        }
+
+        stored_analyses = list(
+            session.scalars(
+                select(DocumentAnalysis)
+                .where(
+                    DocumentAnalysis.document_id
+                    == document_id
+                )
+                .order_by(
+                    DocumentAnalysis.created_at.desc(),
+                    DocumentAnalysis.id.desc(),
+                )
+            )
+        )
+
+        # DocumentAnalysis is append-only. Pick the newest
+        # analysis for each provider.
+        analyses: dict[str, DocumentAnalysis] = {}
+
+        for analysis in stored_analyses:
+            if analysis.provider not in analyses:
+                analyses[analysis.provider] = analysis
 
         assessments = list(
             session.scalars(
@@ -284,7 +433,8 @@ def load_document_bundle(
                     == document_id
                 )
                 .order_by(
-                    RelevanceAssessment.sequence_number.desc()
+                    RelevanceAssessment.provider,
+                    RelevanceAssessment.sequence_number.desc(),
                 )
             )
         )
@@ -303,8 +453,13 @@ def load_document_bundle(
             )
         )
 
-    return document, assessments, text_units
-
+    return (
+        document,
+        provider_states,
+        analyses,
+        assessments,
+        text_units,
+    )
 
 def build_full_transcription(
     text_units: list[DocumentTextUnit],
@@ -333,13 +488,133 @@ def build_full_transcription(
 
     return "\n\n".join(sections)
 
+def show_provider_analysis(
+            *,
+            label: str,
+            state: DocumentProviderState | None,
+            analysis: DocumentAnalysis | None,
+        ) -> None:
+            """Display one provider's current and final result."""
+
+            st.markdown(f"#### {label}")
+
+            relevance = (
+                state.relevance_status
+                if state is not None
+                else "not assessed"
+            )
+
+            score = (
+                analysis.relevance_score
+                if analysis is not None
+                else state.relevance_score
+                if state is not None
+                else None
+            )
+
+            confidence = (
+                analysis.confidence
+                if analysis is not None
+                else state.confidence
+                if state is not None
+                else None
+            )
+
+            category = (
+                analysis.primary_category
+                if analysis is not None
+                else state.primary_category
+                if state is not None
+                else None
+            )
+
+            topic = (
+                analysis.topic
+                if analysis is not None
+                else state.topic
+                if state is not None
+                else None
+            )
+
+            explanation = (
+                analysis.relevance_explanation
+                if analysis is not None
+                else state.relevance_reason
+                if state is not None
+                else None
+            )
+
+            st.write(
+                f"**Relevance:** "
+                f"{display_value(relevance)}"
+            )
+            st.write(
+                "**Relevance score:** "
+                + (
+                    f"{score:.2f}"
+                    if score is not None
+                    else "—"
+                )
+            )
+            st.write(
+                "**Confidence:** "
+                + (
+                    f"{confidence:.2f}"
+                    if confidence is not None
+                    else "—"
+                )
+            )
+            st.write(
+                f"**Category:** {category or '—'}"
+            )
+            st.write(
+                f"**Topic:** {topic or '—'}"
+            )
+
+            st.markdown("**Summary**")
+
+            st.write(
+                analysis.summary
+                if (
+                    analysis is not None
+                    and analysis.summary
+                )
+                else "No final summary has been stored."
+            )
+
+            st.markdown("**Relevance explanation**")
+
+            st.write(
+                explanation
+                or "No relevance explanation has been stored."
+            )
+
+
 def show_document_details(
     document_id: int,
 ) -> None:
     """Display one selected document in the right-hand frame."""
 
-    document, assessments, text_units = (
-        load_document_bundle(document_id)
+    (
+        document,
+        provider_states,
+        analyses,
+        assessments,
+        text_units,
+    ) = load_document_bundle(document_id)
+    
+    openai_state = provider_states.get(
+    AnalysisProvider.OPENAI.value
+    )
+    anthropic_state = provider_states.get(
+        AnalysisProvider.ANTHROPIC.value
+    )
+
+    openai_analysis = analyses.get(
+        AnalysisProvider.OPENAI.value
+    )
+    anthropic_analysis = analyses.get(
+        AnalysisProvider.ANTHROPIC.value
     )
 
     if document is None:
@@ -356,15 +631,11 @@ def show_document_details(
 
     st.subheader(title)
 
-    fact_columns = st.columns(5)
+    fact_columns = st.columns(4)
 
     facts = [
         ("ID", document.id),
         ("Year", document.year or "Unknown"),
-        (
-            "Relevance",
-            display_value(document.relevance_status),
-        ),
         (
             "Text",
             display_value(
@@ -398,11 +669,11 @@ def show_document_details(
     )
 
     with overview_tab:
-        metadata_columns = st.columns(2)
+        st.markdown("#### Catalogue")
 
-        with metadata_columns[0]:
-            st.markdown("#### Catalogue")
+        catalogue_columns = st.columns(2)
 
+        with catalogue_columns[0]:
             st.write(
                 f"**Source:** "
                 f"{display_value(document.source)}"
@@ -415,30 +686,41 @@ def show_document_details(
                 f"**Author:** "
                 f"{document.author or '—'}"
             )
+
+        with catalogue_columns[1]:
             st.write(
                 f"**Processing status:** "
                 f"{document.processing_status or '—'}"
             )
 
-        with metadata_columns[1]:
-            st.markdown("#### Classification")
+            if document.dupo is not None:
+                st.write(
+                    f"**DUPO ID:** "
+                    f"{document.dupo.dupo_id or '—'}"
+                )
+                st.write(
+                    f"**Knuttel number:** "
+                    f"{document.dupo.knuttel_number or '—'}"
+                )
 
-            st.write(
-                f"**Category:** "
-                f"{document.primary_category or '—'}"
+        st.divider()
+
+        provider_columns = st.columns(2)
+
+        with provider_columns[0]:
+            show_provider_analysis(
+                label="OpenAI",
+                state=openai_state,
+                analysis=openai_analysis,
             )
-            st.write(
-                f"**Topic:** "
-                f"{document.topic or '—'}"
+
+        with provider_columns[1]:
+            show_provider_analysis(
+                label="Anthropic",
+                state=anthropic_state,
+                analysis=anthropic_analysis,
             )
-            st.write(
-                f"**Relevance score:** "
-                f"{document.relevance_score or '—'}"
-            )
-            st.write(
-                f"**Confidence:** "
-                f"{document.relevance_confidence or '—'}"
-            )
+            
 
         if document.dupo is not None:
             st.write(
@@ -511,28 +793,31 @@ def show_document_details(
             )
         else:
             assessment_rows = [
-                {
-                    "Assessment": (
-                        assessment.sequence_number
-                    ),
-                    "Pages": assessment.units_processed,
-                    "Decision": display_value(
-                        assessment.decision
-                    ),
-                    "Score": (
-                        assessment.relevance_score
-                    ),
-                    "Confidence": (
-                        assessment.confidence
-                    ),
-                    "Category": (
-                        assessment.primary_category or ""
-                    ),
-                    "Topic": assessment.topic or "",
-                    "Reason": assessment.reason or "",
-                }
-                for assessment in assessments
-            ]
+            {
+                "Provider": (
+                    assessment.provider.title()
+                ),
+                "Assessment": (
+                    assessment.sequence_number
+                ),
+                "Pages": assessment.units_processed,
+                "Decision": display_value(
+                    assessment.decision
+                ),
+                "Score": (
+                    assessment.relevance_score
+                ),
+                "Confidence": (
+                    assessment.confidence
+                ),
+                "Category": (
+                    assessment.primary_category or ""
+                ),
+                "Topic": assessment.topic or "",
+                "Reason": assessment.reason or "",
+            }
+            for assessment in assessments
+        ]
 
             st.dataframe(
                 assessment_rows,
@@ -639,21 +924,7 @@ def show_document_browser() -> None:
         with st.form("document_filters"):
             first_filter_row = st.columns(4)
 
-            evaluation_scope = first_filter_row[0].selectbox(
-                "Evaluation",
-                options=[
-                    "evaluated",
-                    "all",
-                    "not_assessed",
-                ],
-                format_func=lambda value: {
-                    "evaluated": "Evaluated",
-                    "all": "All",
-                    "not_assessed": "Not assessed",
-                }[value],
-            )
-
-            source = first_filter_row[1].selectbox(
+            source = first_filter_row[0].selectbox(
                 "Source",
                 options=[
                     "any",
@@ -669,36 +940,54 @@ def show_document_browser() -> None:
                 ),
             )
 
-            relevance_status = first_filter_row[2].selectbox(
-                "Relevance",
-                options=[
-                    "any",
-                    *[
-                        status.value
-                        for status in RelevanceStatus
-                    ],
-                ],
-                format_func=lambda value: (
-                    "Any"
-                    if value == "any"
-                    else value.replace("_", " ").title()
-                ),
+            relevance_options = [
+                "any",
+                "not_assessed",
+                RelevanceStatus.RELEVANT.value,
+                RelevanceStatus.UNCERTAIN.value,
+                RelevanceStatus.IRRELEVANT.value,
+            ]
+
+            openai_relevance_status = (
+                first_filter_row[1].selectbox(
+                    "OpenAI relevance",
+                    options=relevance_options,
+                    format_func=lambda value: (
+                        "Any"
+                        if value == "any"
+                        else value.replace("_", " ").title()
+                    ),
+                )
             )
 
-            classification_status = first_filter_row[3].selectbox(
-                "Text status",
-                options=[
-                    "any",
-                    *[
-                        status.value
-                        for status in ClassificationStatus
+            anthropic_relevance_status = (
+                first_filter_row[2].selectbox(
+                    "Anthropic relevance",
+                    options=relevance_options,
+                    format_func=lambda value: (
+                        "Any"
+                        if value == "any"
+                        else value.replace("_", " ").title()
+                    ),
+                )
+            )
+
+            classification_status = (
+                first_filter_row[3].selectbox(
+                    "Text status",
+                    options=[
+                        "any",
+                        *[
+                            status.value
+                            for status in ClassificationStatus
+                        ],
                     ],
-                ],
-                format_func=lambda value: (
-                    "Any"
-                    if value == "any"
-                    else value.replace("_", " ").title()
-                ),
+                    format_func=lambda value: (
+                        "Any"
+                        if value == "any"
+                        else value.replace("_", " ").title()
+                    ),
+                )
             )
 
             second_filter_row = st.columns(4)
@@ -784,9 +1073,13 @@ def show_document_browser() -> None:
         )
 
         documents, has_next_page = search_documents(
-            evaluation_scope=evaluation_scope,
             source=source,
-            relevance_status=relevance_status,
+            openai_relevance_status=(
+                openai_relevance_status
+            ),
+            anthropic_relevance_status=(
+                anthropic_relevance_status
+            ),
             classification_status=(
                 classification_status
             ),
@@ -865,10 +1158,9 @@ def show_document_browser() -> None:
                 "ID",
                 "Year",
                 "Title",
-                "Relevance",
+                "OpenAI",
+                "Anthropic",
                 "Text",
-                "Category",
-                "Topic",
             ],
         )
 
@@ -923,7 +1215,7 @@ def show_document_browser() -> None:
         )
 
         st.divider()
-
+        
         show_document_details(
             selected_document_id
         )
